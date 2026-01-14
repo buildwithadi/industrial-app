@@ -1,0 +1,33 @@
+name: grid_sphere_industrial
+description: Industrial monitoring application.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.6
+  # Added intl package for DateFormat functionality in dashboard.dart
+  intl: ^0.19.0
+  # Network and Storage dependencies for Login Logic
+  http: ^1.2.0
+  shared_preferences: ^2.2.2
+  workmanager: ^0.8.0
+  flutter_local_notifications: ^19.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Ensure your logo is registered here
+  assets:
+    - ./assets/logo.png
