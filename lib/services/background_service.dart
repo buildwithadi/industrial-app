@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
-import 'package:grid_sphere_industrial/services/notification_services.dart';
+import './notification_services.dart';
 
 // Key for the task
 const String fetchBackgroundTask = "fetchBackgroundTask";
@@ -25,12 +25,11 @@ void callbackDispatcher() {
       }
 
       // 2. Fetch Live Data
-      // Note: Assuming API structure is same as dashboard
       final response = await http.get(
         Uri.parse('https://gridsphere.in/station/api/live-data/$deviceId'),
         headers: {
           'Cookie': sessionCookie,
-          'User-Agent': 'FlutterApp', // Keep consistent
+          'User-Agent': 'FlutterApp',
           'Accept': 'application/json',
         },
       );
@@ -47,20 +46,38 @@ void callbackDispatcher() {
         if (readings.isNotEmpty) {
           final data = readings[0];
 
-          // 3. Check Thresholds
-          await _checkAndAlert(prefs, 'air_temp', 'Temperature', data['temp'],
-              '°C', notificationService, 1);
-          await _checkAndAlert(prefs, 'humidity', 'Humidity', data['humidity'],
-              '%', notificationService, 2);
-          await _checkAndAlert(prefs, 'rainfall', 'Rainfall', data['rainfall'],
-              'mm', notificationService, 3);
-          await _checkAndAlert(prefs, 'light_intensity', 'Light',
-              data['light_intensity'], 'lux', notificationService, 4);
-          await _checkAndAlert(prefs, 'pressure', 'Pressure', data['pressure'],
-              'hPa', notificationService, 5);
-          await _checkAndAlert(prefs, 'wind', 'Wind Speed', data['wind_speed'],
-              'km/h', notificationService, 6);
-          // Add others if needed (PM2.5, etc.)
+          // --- NEW LOGIC START: Check for Data Freshness ---
+          String currentTimestamp = data['timestamp']?.toString() ?? "";
+          String? lastProcessedTime =
+              prefs.getString('last_processed_timestamp');
+
+          // Only proceed if we have a valid timestamp AND it's different from the last one
+          if (currentTimestamp.isNotEmpty &&
+              currentTimestamp != lastProcessedTime) {
+            // 3. Check Thresholds (Only performed on NEW data)
+            await _checkAndAlert(prefs, 'air_temp', 'Temperature', data['temp'],
+                '°C', notificationService, 1);
+            await _checkAndAlert(prefs, 'humidity', 'Humidity',
+                data['humidity'], '%', notificationService, 2);
+            await _checkAndAlert(prefs, 'rainfall', 'Rainfall',
+                data['rainfall'], 'mm', notificationService, 3);
+            await _checkAndAlert(prefs, 'light_intensity', 'Light',
+                data['light_intensity'], 'lux', notificationService, 4);
+            await _checkAndAlert(prefs, 'pressure', 'Pressure',
+                data['pressure'], 'hPa', notificationService, 5);
+            await _checkAndAlert(prefs, 'wind', 'Wind Speed',
+                data['wind_speed'], 'km/h', notificationService, 6);
+
+            // 4. Update the stored timestamp so we don't alert on this specific reading again
+            await prefs.setString('last_processed_timestamp', currentTimestamp);
+
+            print(
+                "Background Service: Processed new data at $currentTimestamp");
+          } else {
+            print(
+                "Background Service: Data unchanged ($currentTimestamp). Skipping alerts.");
+          }
+          // --- NEW LOGIC END ---
         }
       }
     } catch (e) {

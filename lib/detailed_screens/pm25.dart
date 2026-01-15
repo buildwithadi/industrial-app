@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
 class GoogleFonts {
@@ -40,6 +42,7 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
   String _selectedRange = "24h";
   List<GraphPoint> _graphData = [];
   bool _isLoading = true;
+  String _errorMessage = "";
 
   // Stats
   double maxVal = 0.0;
@@ -48,79 +51,127 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
   String maxTime = "--";
   String minTime = "--";
 
+  final String _baseUrl = "https://gridsphere.in/station/api";
+  final String _userAgent = "FlutterApp";
+
   @override
   void initState() {
     super.initState();
-    _generateMockData(_selectedRange);
+    _fetchHistoryData(_selectedRange);
   }
 
-  // --- MOCK DATA GENERATION ---
-  Future<void> _generateMockData(String range) async {
+  Future<void> _fetchHistoryData(String range) async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
       _selectedRange = range;
+      _errorMessage = "";
       _graphData = [];
     });
 
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
+    try {
+      String apiRange = 'daily';
+      if (range == '7d') apiRange = 'weekly';
+      if (range == '30d') apiRange = 'monthly';
 
-    Random r = Random();
-    int pointsCount = range == '24h'
-        ? 24
-        : range == '7d'
-            ? 7
-            : 30;
-    List<GraphPoint> points = [];
-    DateTime now = DateTime.now();
+      final response = await http.get(
+        Uri.parse(
+            '$_baseUrl/devices/${widget.deviceId}/history?range=$apiRange'),
+        headers: {
+          'Cookie': widget.sessionCookie,
+          'User-Agent': _userAgent,
+          'Accept': 'application/json',
+        },
+      );
 
-    double localMax = -999;
-    double localMin = 999;
-    double sum = 0;
-    String localMaxTime = "--";
-    String localMinTime = "--";
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> rawData = [];
 
-    // Base value varies to simulate realistic pollution trends
-    double baseValue = 35.0;
+        if (jsonResponse is Map && jsonResponse.containsKey('data')) {
+          rawData = jsonResponse['data'];
+        } else if (jsonResponse is List) {
+          rawData = jsonResponse;
+        }
 
-    for (int i = 0; i < pointsCount; i++) {
-      // Simulate fluctuation: PM 2.5 often spikes in morning/evening
-      double noise = (r.nextDouble() * 20) - 10; // +/- 10
-      double val = baseValue + noise;
+        if (rawData.isNotEmpty) {
+          List<GraphPoint> points = [];
+          double sum = 0;
+          double localMax = -999;
+          double localMin = 9999;
+          String localMaxTime = "--";
+          String localMinTime = "--";
 
-      // Ensure positive values
-      if (val < 5) val = 5 + r.nextDouble() * 5;
+          for (var item in rawData) {
+            // Parse 'pm25'
+            if (item['pm25'] == null) continue;
+            double val = double.tryParse(item['pm25'].toString()) ?? 0.0;
+            String timeStr = item['timestamp']?.toString() ?? "";
+            DateTime time = DateTime.now();
+            if (timeStr.isNotEmpty) {
+              try {
+                time = DateTime.parse(timeStr.replaceAll(' ', 'T'));
+              } catch (_) {}
+            }
 
-      DateTime time;
-      if (range == '24h') {
-        time = now.subtract(Duration(hours: pointsCount - 1 - i));
+            points.add(GraphPoint(val, time));
+
+            sum += val;
+            if (val > localMax) {
+              localMax = val;
+              localMaxTime = _formatTimeForStat(time, range);
+            }
+            if (val < localMin) {
+              localMin = val;
+              localMinTime = _formatTimeForStat(time, range);
+            }
+          }
+
+          points.sort((a, b) => a.time.compareTo(b.time));
+
+          if (mounted) {
+            if (points.isNotEmpty) {
+              setState(() {
+                _graphData = points;
+                maxVal = localMax;
+                minVal = localMin;
+                avgVal = sum / points.length;
+                maxTime = localMaxTime;
+                minTime = localMinTime;
+                _isLoading = false;
+              });
+            } else {
+              setState(() {
+                _errorMessage = "No Data Available";
+                _isLoading = false;
+              });
+            }
+          }
+        } else {
+          if (mounted) {
+            setState(() {
+              _errorMessage = "No Data Available";
+              _isLoading = false;
+            });
+          }
+        }
       } else {
-        time = now.subtract(Duration(days: pointsCount - 1 - i));
+        if (mounted) {
+          setState(() {
+            _errorMessage = "Server Error: ${response.statusCode}";
+            _isLoading = false;
+          });
+        }
       }
-
-      points.add(GraphPoint(val, time));
-
-      sum += val;
-      if (val > localMax) {
-        localMax = val;
-        localMaxTime = _formatTimeForStat(time, range);
+    } catch (e) {
+      debugPrint("Error fetching history: $e");
+      if (mounted) {
+        setState(() {
+          _errorMessage = "Connection Error";
+          _isLoading = false;
+        });
       }
-      if (val < localMin) {
-        localMin = val;
-        localMinTime = _formatTimeForStat(time, range);
-      }
-    }
-
-    if (mounted) {
-      setState(() {
-        _graphData = points;
-        maxVal = localMax;
-        minVal = localMin;
-        avgVal = sum / pointsCount;
-        maxTime = localMaxTime;
-        minTime = localMinTime;
-        _isLoading = false;
-      });
     }
   }
 
@@ -131,7 +182,7 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
 
   // --- AI Insights Logic for PM 2.5 ---
   String _getAIInsight() {
-    if (_graphData.isEmpty) return "Gathering data...";
+    if (_graphData.isEmpty) return "No data available for insights.";
 
     if (avgVal > 150) {
       return "🔴 Unhealthy Air Quality. PM 2.5 levels are critically high. Avoid outdoor activities and wear masks.";
@@ -175,7 +226,7 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
         child: Column(
           children: [
             // AI Insight
-            if (!_isLoading) _buildAIInsightCard(),
+            if (!_isLoading && _errorMessage.isEmpty) _buildAIInsightCard(),
             const SizedBox(height: 20),
 
             // Tabs
@@ -301,13 +352,22 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
                         ? const Center(
                             child: CircularProgressIndicator(
                                 color: Colors.blueGrey))
-                        : CustomPaint(
-                            painter: _DetailedChartPainter(
-                              dataPoints: _graphData,
-                              color: Colors.blueGrey,
-                              range: _selectedRange,
-                            ),
-                          ),
+                        : _graphData.isEmpty || _errorMessage.isNotEmpty
+                            ? Center(
+                                child: Text(
+                                  _errorMessage.isNotEmpty
+                                      ? _errorMessage
+                                      : "No Data Available",
+                                  style: TextStyle(color: Colors.grey.shade500),
+                                ),
+                              )
+                            : CustomPaint(
+                                painter: _DetailedChartPainter(
+                                  dataPoints: _graphData,
+                                  color: Colors.blueGrey,
+                                  range: _selectedRange,
+                                ),
+                              ),
                   ),
                 ],
               ),
@@ -368,7 +428,7 @@ class _PM25DetailScreenState extends State<PM25DetailScreen> {
     final isSelected = _selectedRange == rangeKey;
     return Expanded(
       child: GestureDetector(
-        onTap: () => _generateMockData(rangeKey),
+        onTap: () => _fetchHistoryData(rangeKey),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
@@ -479,14 +539,6 @@ class _DetailedChartPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final fillPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [color.withOpacity(0.2), color.withOpacity(0.0)],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..style = PaintingStyle.fill;
-
     double minVal = dataPoints.map((e) => e.value).reduce(min);
     double maxVal = dataPoints.map((e) => e.value).reduce(max);
 
@@ -524,7 +576,6 @@ class _DetailedChartPainter extends CustomPainter {
     }
 
     final path = Path();
-    final fillPath = Path();
 
     double dx = 0;
     if (dataPoints.length > 1) {
@@ -543,8 +594,6 @@ class _DetailedChartPainter extends CustomPainter {
 
       if (i == 0) {
         path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
       } else {
         double prevX = paddingLeft + ((i - 1) * dx);
         double prevNormalizeVal = (dataPoints[i - 1].value - minVal) / yRange;
@@ -557,19 +606,10 @@ class _DetailedChartPainter extends CustomPainter {
         double controlY2 = y;
 
         path.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
-        fillPath.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
       }
     }
 
-    if (dataPoints.length > 1) {
-      fillPath.lineTo(paddingLeft + chartWidth, size.height);
-      fillPath.lineTo(paddingLeft, size.height);
-    } else {
-      fillPath.lineTo(size.width / 2, size.height);
-    }
-    fillPath.close();
-
-    canvas.drawPath(fillPath, fillPaint);
+    // Only draw the path, no fill
     canvas.drawPath(path, paint);
 
     int labelCount = 5;

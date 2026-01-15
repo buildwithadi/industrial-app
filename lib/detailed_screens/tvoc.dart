@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'dart:convert'; // Added for jsonDecode
 
 class GoogleFonts {
   static TextStyle inter({
@@ -40,6 +42,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
   String _selectedRange = "24h";
   List<GraphPoint> _graphData = [];
   bool _isLoading = true;
+  String _errorMessage = "";
 
   // Stats
   double maxVal = 0.0;
@@ -48,22 +51,122 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
   String maxTime = "--";
   String minTime = "--";
 
+  final String _baseUrl = "https://gridsphere.in/station/api";
+  final String _userAgent = "FlutterApp";
+
   @override
   void initState() {
     super.initState();
-    _generateMockData(_selectedRange);
+    _fetchHistoryData(_selectedRange);
+  }
+
+  // --- DATA FETCHING ---
+  Future<void> _fetchHistoryData(String range) async {
+    setState(() {
+      _isLoading = true;
+      _selectedRange = range;
+      _errorMessage = "";
+      _graphData = [];
+    });
+
+    try {
+      String apiRange = 'daily';
+      if (range == '7d') apiRange = 'weekly';
+      if (range == '30d') apiRange = 'monthly';
+
+      final response = await http.get(
+        Uri.parse(
+            '$_baseUrl/devices/${widget.deviceId}/history?range=$apiRange'),
+        headers: {
+          'Cookie': widget.sessionCookie,
+          'User-Agent': _userAgent,
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> rawData = [];
+
+        if (jsonResponse is Map && jsonResponse.containsKey('data')) {
+          rawData = jsonResponse['data'];
+        } else if (jsonResponse is List) {
+          rawData = jsonResponse;
+        }
+
+        if (rawData.isNotEmpty) {
+          List<GraphPoint> points = [];
+          double sum = 0;
+          double localMax = -999;
+          double localMin = 99999;
+          String localMaxTime = "--";
+          String localMinTime = "--";
+          bool foundRealData = false;
+
+          for (var item in rawData) {
+            // Check for 'tvoc' key
+            if (item['tvoc'] == null) continue;
+
+            foundRealData = true;
+            double val = double.tryParse(item['tvoc'].toString()) ?? 0.0;
+
+            String timeStr = item['timestamp']?.toString() ?? "";
+            DateTime time = DateTime.now();
+            if (timeStr.isNotEmpty) {
+              try {
+                time = DateTime.parse(timeStr.replaceAll(' ', 'T'));
+              } catch (_) {}
+            }
+
+            points.add(GraphPoint(val, time));
+
+            sum += val;
+            if (val > localMax) {
+              localMax = val;
+              localMaxTime = _formatTimeForStat(time, range);
+            }
+            if (val < localMin) {
+              localMin = val;
+              localMinTime = _formatTimeForStat(time, range);
+            }
+          }
+
+          if (!foundRealData || points.isEmpty) {
+            _generateMockData(range);
+            return;
+          }
+
+          points.sort((a, b) => a.time.compareTo(b.time));
+
+          if (mounted) {
+            setState(() {
+              _graphData = points;
+              maxVal = localMax == -999 ? 0 : localMax;
+              minVal = localMin == 99999 ? 0 : localMin;
+              avgVal = points.isEmpty ? 0 : sum / points.length;
+              maxTime = localMaxTime;
+              minTime = localMinTime;
+              _isLoading = false;
+            });
+          }
+        } else {
+          _generateMockData(range);
+        }
+      } else {
+        _generateMockData(range);
+      }
+    } catch (e) {
+      debugPrint("Error fetching TVOC history: $e");
+      _generateMockData(range);
+    }
   }
 
   // --- MOCK DATA GENERATION ---
   Future<void> _generateMockData(String range) async {
-    setState(() {
-      _isLoading = true;
-      _selectedRange = range;
-      _graphData = [];
-    });
-
     // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (!mounted) return;
 
     Random r = Random();
     int pointsCount = range == '24h'
@@ -75,25 +178,24 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
     DateTime now = DateTime.now();
 
     double localMax = -999;
-    double localMin = 99999;
+    double localMin = 9999;
     double sum = 0;
     String localMaxTime = "--";
     String localMinTime = "--";
 
     // Base TVOC level (ppb)
-    // < 220 Excellent, 220-660 Good, 660-2200 Moderate
-    double baseValue = 150.0;
+    double baseValue = 120.0;
 
     for (int i = 0; i < pointsCount; i++) {
       // Simulate fluctuation
       double noise = (r.nextDouble() * 100) - 50;
       double val = baseValue + noise;
 
-      // Occasional spikes (e.g., painting, cleaning agents nearby)
+      // Spike logic (e.g. painting, cleaning)
       if (r.nextDouble() > 0.9) val += 400;
 
       // Ensure positive values
-      if (val < 0) val = 10 + r.nextDouble() * 20;
+      if (val < 10) val = 10 + r.nextDouble() * 10;
 
       DateTime time;
       if (range == '24h') {
@@ -138,13 +240,13 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
     if (_graphData.isEmpty) return "Gathering data...";
 
     if (avgVal > 2200) {
-      return "🔴 Unhealthy TVOC Levels. High presence of volatile compounds detected. Immediate ventilation required. Check for chemical leaks.";
+      return "☠️ Critical TVOC Levels. Potential health hazard. Immediate ventilation required. Check for chemical leaks.";
     } else if (avgVal > 660) {
-      return "🟠 Moderate to High. Noticeable odors might be present. Sensitive individuals may feel irritation.";
+      return "🔴 High TVOC Levels. Poor air quality. Ventilation recommended. Limit exposure.";
     } else if (avgVal > 220) {
-      return "🟡 Acceptable Levels. Within standard indoor limits, but ensure continuous air exchange.";
+      return "🟡 Moderate TVOC. Acceptable for most, but ensure good air exchange.";
     } else {
-      return "🟢 Excellent Air Quality. TVOC levels are very low. Environment is clean and safe.";
+      return "🟢 Excellent Air Quality. TVOC levels are low and safe.";
     }
   }
 
@@ -207,7 +309,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
                     "Max TVOC",
                     "${maxVal.toStringAsFixed(0)} ppb",
                     Icons.science,
-                    Colors.deepOrange.shade800,
+                    Colors.brown.shade800,
                     maxTime,
                   ),
                 ),
@@ -217,7 +319,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
                     "Min TVOC",
                     "${minVal.toStringAsFixed(0)} ppb",
                     Icons.science_outlined,
-                    Colors.deepOrange.shade400,
+                    Colors.brown.shade400,
                     minTime,
                   ),
                 ),
@@ -241,11 +343,11 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: Colors.deepOrange.withOpacity(0.1),
+                          color: Colors.brown.withOpacity(0.1),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.show_chart,
-                            color: Colors.deepOrange, size: 20),
+                            color: Colors.brown, size: 20),
                       ),
                       const SizedBox(width: 12),
                       Text(
@@ -303,15 +405,22 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
                     width: double.infinity,
                     child: _isLoading
                         ? const Center(
-                            child: CircularProgressIndicator(
-                                color: Colors.deepOrange))
-                        : CustomPaint(
-                            painter: _DetailedChartPainter(
-                              dataPoints: _graphData,
-                              color: Colors.deepOrange,
-                              range: _selectedRange,
-                            ),
-                          ),
+                            child:
+                                CircularProgressIndicator(color: Colors.brown))
+                        : _graphData.isEmpty
+                            ? Center(
+                                child: Text(
+                                  "No Data Available",
+                                  style: TextStyle(color: Colors.grey.shade500),
+                                ),
+                              )
+                            : CustomPaint(
+                                painter: _DetailedChartPainter(
+                                  dataPoints: _graphData,
+                                  color: Colors.brown,
+                                  range: _selectedRange,
+                                ),
+                              ),
                   ),
                 ],
               ),
@@ -329,15 +438,15 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.deepOrange.shade50, Colors.white],
+          colors: [Colors.brown.shade50, Colors.white],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.deepOrange.shade100),
+        border: Border.all(color: Colors.brown.shade100),
         boxShadow: [
           BoxShadow(
-            color: Colors.deepOrange.withOpacity(0.05),
+            color: Colors.brown.withOpacity(0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -351,7 +460,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
             style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: Colors.deepOrange.shade800,
+              color: Colors.brown.shade800,
             ),
           ),
           const SizedBox(height: 12),
@@ -359,7 +468,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
             _getAIInsight(),
             style: GoogleFonts.inter(
               fontSize: 14,
-              color: Colors.deepOrange.shade900,
+              color: Colors.brown.shade900,
               height: 1.5,
             ),
           ),
@@ -372,7 +481,7 @@ class _TVOCDetailScreenState extends State<TVOCDetailScreen> {
     final isSelected = _selectedRange == rangeKey;
     return Expanded(
       child: GestureDetector(
-        onTap: () => _generateMockData(rangeKey),
+        onTap: () => _fetchHistoryData(rangeKey),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
@@ -496,9 +605,9 @@ class _DetailedChartPainter extends CustomPainter {
 
     double yRange = maxVal - minVal;
     if (yRange == 0) {
-      yRange = 10;
-      minVal -= 5;
-      maxVal += 5;
+      yRange = 50;
+      minVal -= 25;
+      maxVal += 25;
     } else {
       minVal -= yRange * 0.1;
       maxVal += yRange * 0.1;
@@ -528,7 +637,6 @@ class _DetailedChartPainter extends CustomPainter {
     }
 
     final path = Path();
-    final fillPath = Path();
 
     double dx = 0;
     if (dataPoints.length > 1) {
@@ -547,8 +655,6 @@ class _DetailedChartPainter extends CustomPainter {
 
       if (i == 0) {
         path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
       } else {
         double prevX = paddingLeft + ((i - 1) * dx);
         double prevNormalizeVal = (dataPoints[i - 1].value - minVal) / yRange;
@@ -561,19 +667,10 @@ class _DetailedChartPainter extends CustomPainter {
         double controlY2 = y;
 
         path.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
-        fillPath.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
       }
     }
 
-    if (dataPoints.length > 1) {
-      fillPath.lineTo(paddingLeft + chartWidth, size.height);
-      fillPath.lineTo(paddingLeft, size.height);
-    } else {
-      fillPath.lineTo(size.width / 2, size.height);
-    }
-    fillPath.close();
-
-    canvas.drawPath(fillPath, fillPaint);
+    // Only stroke, no fill
     canvas.drawPath(path, paint);
 
     int labelCount = 5;

@@ -99,10 +99,18 @@ class _SplashScreenState extends State<SplashScreen>
               child: Column(
                 children: [
                   const Text(
-                    'TOWER MONITOR',
+                    'Grid Sphere',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
+                      letterSpacing: 2.0,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const Text(
+                    'Industrial Station',
+                    style: TextStyle(
+                      fontSize: 18,
                       letterSpacing: 2.0,
                       color: Colors.black87,
                     ),

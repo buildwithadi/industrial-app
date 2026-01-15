@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/session_manager.dart';
+
 // Import detailed screens
 import '../detailed_screens/temperature.dart';
 import '../detailed_screens/humidity.dart';
@@ -12,8 +14,11 @@ import '../detailed_screens/light_intensity.dart';
 import '../detailed_screens/pressure.dart';
 import '../detailed_screens/wind_speed.dart';
 import '../detailed_screens/pm25.dart';
-import '../detailed_screens/co2.dart';
-import '../detailed_screens/tvoc.dart';
+import '../detailed_screens/aqi.dart';
+// import '../detailed_screens/tvoc.dart'; // Commented out until file is created
+
+// Import Alert Settings
+import 'alert_settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final String? sessionCookie;
@@ -27,8 +32,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   // --- SESSION & NETWORK ---
   final SessionManager _session = SessionManager();
-  final http.Client _client =
-      http.Client(); // Dedicated client for this screen instance
+  final http.Client _client = http.Client();
 
   // --- STATE VARIABLES ---
   String selectedDeviceId = "";
@@ -40,7 +44,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String deviceStatus = "Offline";
   String deviceLocation = "--";
 
-  // Offline State
   bool isDeviceOffline = false;
 
   Map<String, dynamic>? sensorData;
@@ -49,41 +52,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isLoading = true;
   Timer? _timer;
 
-  String _selectedCategory = 'Weather';
-
-  final List<Map<String, dynamic>> _mockAirQualityData = [
-    {
-      'id': 'PM-01',
-      'name': 'PM 2.5',
-      'value': '15 µg/m³',
-      'status': 'normal',
-      'icon': Icons.grain,
-      'history': [12.0, 14.0, 15.0, 13.0, 15.0, 16.0],
-      'isNavigable': true
-    },
-    {
-      'id': 'CO2-02',
-      'name': 'CO2',
-      'value': '550 ppm',
-      'status': 'warning',
-      'icon': Icons.cloud,
-      'history': [500.0, 520.0, 550.0, 540.0, 560.0, 550.0],
-      'isNavigable': true
-    },
-    {
-      'id': 'TVOC-03',
-      'name': 'TVOC',
-      'value': '120 ppb',
-      'status': 'normal',
-      'icon': Icons.science,
-      'history': [100.0, 110.0, 120.0, 115.0, 118.0, 120.0],
-      'isNavigable': true
-    },
-  ];
+  // Page Controller for sliding functionality
+  late PageController _pageController;
+  int _currentPageIndex = 0;
 
   @override
   void initState() {
     super.initState();
+    _pageController = PageController(initialPage: 0);
     _initializeData();
 
     // Periodic refresh
@@ -97,7 +73,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _client.close(); // Cancel all pending network requests for this screen
+    _client.close();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -126,8 +103,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refreshData() async {
     if (!mounted) return;
-    // Don't show full loading spinner for refresh, just update UI when data arrives
-    // setState(() => isLoading = true);
     await Future.wait([
       _fetchLiveData(),
       _fetchHistoryData(),
@@ -158,13 +133,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
 
         if (deviceList.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          String? savedId = prefs.getString('selected_device_id');
+          var deviceToSelect = deviceList[0];
+
+          if (savedId != null) {
+            try {
+              deviceToSelect =
+                  deviceList.firstWhere((d) => d['d_id'].toString() == savedId);
+            } catch (_) {}
+          }
+
           setState(() {
             _devices = deviceList;
-            var device = deviceList[0];
-            selectedDeviceId = device['d_id'].toString();
-            deviceLocation = device['address']?.toString() ?? "Field A";
-            farmerName = device["farm_name"]?.toString() ?? "Farmer";
+            selectedDeviceId = deviceToSelect['d_id'].toString();
+            deviceLocation = deviceToSelect['address']?.toString() ?? "Field A";
+            farmerName = deviceToSelect["farm_name"]?.toString() ?? "Farmer";
           });
+
+          await prefs.setString('selected_device_id', selectedDeviceId);
         }
       }
     } catch (e) {
@@ -224,7 +211,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               "wind": double.tryParse(reading['wind_speed'].toString()) ?? 0.0,
               "pressure":
                   double.tryParse(reading['pressure'].toString()) ?? 0.0,
+              "pm25": double.tryParse(reading['pm25'].toString()) ?? 0.0,
+              "tvoc": double.tryParse(reading['tvoc'].toString()) ?? 0.0,
+              "aqi": double.tryParse(reading['aqi'].toString()) ?? 0.0,
             };
+            isLoading = false;
           });
         }
       }
@@ -267,6 +258,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           newHistory['light_intensity'] = extractList('light_intensity');
           newHistory['wind'] = extractList('wind_speed');
           newHistory['pressure'] = extractList('pressure');
+          newHistory['pm25'] = extractList('pm25');
+          newHistory['tvoc'] = extractList('tvoc');
+          newHistory['aqi'] = extractList('aqi');
 
           newHistory.forEach((key, list) {
             newHistory[key] = list.reversed.toList();
@@ -285,14 +279,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // --- ACTIONS ---
   Future<void> _logout() async {
     setState(() => isLoading = true);
-    await _session.clearSession(); // Clears memory and SharedPreferences
+    await _session.clearSession();
     if (mounted) {
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
     }
   }
 
-  void _switchDevice(String deviceId, String location, String name) {
+  void _switchDevice(String deviceId, String location, String name) async {
     if (selectedDeviceId == deviceId) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selected_device_id', deviceId);
 
     setState(() {
       selectedDeviceId = deviceId;
@@ -308,11 +305,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _refreshData();
   }
 
-  void _switchCategory(String category) {
-    if (_selectedCategory == category) return;
-    setState(() {
-      _selectedCategory = category;
-    });
+  void _onCategoryTapped(int index) {
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   void _loadMockData() {
@@ -322,16 +320,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
         farmerName = "Aditya Farm";
         deviceStatus = "Online";
         lastOnline = "Today, 10:30 AM";
+
+        sensorData = {
+          "air_temp": 25.5,
+          "humidity": 60.0,
+          "rainfall": 0.0,
+          "light_intensity": 1200.0,
+          "wind": 12.0,
+          "pressure": 1013.0,
+          "pm25": 12.0,
+          "tvoc": 100.0,
+          "aqi": 45.0,
+        };
       });
     }
   }
 
-  // --- UI HELPERS ---
-  List<Map<String, dynamic>> _getDisplayData() {
-    if (_selectedCategory == 'Air Quality') {
-      return _mockAirQualityData;
-    }
-
+  // --- DATA HELPERS ---
+  List<Map<String, dynamic>> _getWeatherData() {
     if (sensorData == null) return [];
 
     String val(String key, String unit) =>
@@ -398,10 +404,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ];
   }
 
+  List<Map<String, dynamic>> _getAirQualityData() {
+    if (sensorData == null) return [];
+
+    String val(String key, String unit) =>
+        "${sensorData![key]?.toString() ?? '--'} $unit";
+    double rawVal(String key) =>
+        double.tryParse(sensorData![key]?.toString() ?? '0') ?? 0;
+    List<double> hist(String key) => historyData[key] ?? [];
+
+    return [
+      {
+        'id': 'AQI-00',
+        'name': 'AQI',
+        'value': val('aqi', ''),
+        'status': rawVal('aqi') > 100 ? 'warning' : 'normal',
+        'icon': Icons.filter_drama,
+        'history': hist('aqi'),
+        'isNavigable': true
+      },
+      {
+        'id': 'PM-01',
+        'name': 'PM 2.5',
+        'value': val('pm25', 'µg/m³'),
+        'status': rawVal('pm25') > 35 ? 'warning' : 'normal',
+        'icon': Icons.grain,
+        'history': hist('pm25'),
+        'isNavigable': true
+      },
+      {
+        'id': 'TVOC-03', 'name': 'TVOC', 'value': val('tvoc', 'ppb'),
+        'status': rawVal('tvoc') > 400 ? 'warning' : 'normal',
+        'icon': Icons.science, 'history': hist('tvoc'),
+        'isNavigable': false // Until screen exists
+      },
+    ];
+  }
+
+  Color _getSensorColor(String name) {
+    if (name.contains("Temperature")) return Colors.orange;
+    if (name.contains("Humidity")) return Colors.blue;
+    if (name.contains("Rainfall")) return Colors.indigo;
+    if (name.contains("Light")) return Colors.amber;
+    if (name.contains("Pressure")) return Colors.deepPurple;
+    if (name.contains("Wind")) return Colors.teal;
+    if (name.contains("PM 2.5")) return Colors.blueGrey;
+    if (name.contains("TVOC")) return Colors.brown;
+    if (name.contains("AQI")) return Colors.cyan;
+    return Colors.grey;
+  }
+
   @override
   Widget build(BuildContext context) {
-    List<Map<String, dynamic>> displayData = _getDisplayData();
-
     return Scaffold(
       appBar: AppBar(
         title: _devices.isEmpty
@@ -451,43 +505,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: AbsorbPointer(
         absorbing: isLoading,
-        child: RefreshIndicator(
-          onRefresh: _refreshData,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeaderStatus(),
-                const SizedBox(height: 24),
-                _buildCategoryToggle(),
-                const SizedBox(height: 24),
-                Text(
-                  "$_selectedCategory READINGS".toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black54,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                isLoading && displayData.isEmpty
-                    ? const Center(
-                        child: Padding(
-                        padding: EdgeInsets.all(32.0),
-                        child: CircularProgressIndicator(),
-                      ))
-                    : displayData.isEmpty
-                        ? _buildNoDataState()
-                        : _buildSensorGrid(displayData),
-              ],
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: _buildHeaderStatus(),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: _buildCategoryToggle(),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: PageView(
+                controller: _pageController,
+                onPageChanged: (index) {
+                  setState(() {
+                    _currentPageIndex = index;
+                  });
+                },
+                children: [
+                  _buildPageContent("Weather Readings", _getWeatherData()),
+                  _buildPageContent(
+                      "Air Quality Readings", _getAirQualityData()),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
       drawer: _buildDrawer(),
+    );
+  }
+
+  Widget _buildPageContent(String title, List<Map<String, dynamic>> data) {
+    return RefreshIndicator(
+      onRefresh: _refreshData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title.toUpperCase(),
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.black54,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 12),
+            (isLoading && sensorData == null)
+                ? const Center(
+                    child: Padding(
+                    padding: EdgeInsets.all(32.0),
+                    child: CircularProgressIndicator(),
+                  ))
+                : data.isEmpty
+                    ? _buildNoDataState()
+                    : _buildSensorGrid(data),
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
     );
   }
 
@@ -521,15 +603,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Expanded(
             child: _buildToggleButton(
               title: "Weather",
-              isSelected: _selectedCategory == 'Weather',
-              onTap: () => _switchCategory('Weather'),
+              isSelected: _currentPageIndex == 0,
+              onTap: () => _onCategoryTapped(0),
             ),
           ),
           Expanded(
             child: _buildToggleButton(
               title: "Air Quality",
-              isSelected: _selectedCategory == 'Air Quality',
-              onTap: () => _switchCategory('Air Quality'),
+              isSelected: _currentPageIndex == 1,
+              onTap: () => _onCategoryTapped(1),
             ),
           ),
         ],
@@ -725,7 +807,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      // Adjusted aspect ratio for better card fit
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         crossAxisSpacing: 12,
@@ -740,30 +821,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Helper to determine specific colors for sensor types
-  Color _getSensorColor(String name) {
-    if (name.contains("Temperature")) return Colors.orange;
-    if (name.contains("Humidity")) return Colors.blue;
-    if (name.contains("Rainfall")) return Colors.indigo;
-    if (name.contains("Light")) return Colors.amber;
-    if (name.contains("Pressure")) return Colors.deepPurple;
-    if (name.contains("Wind")) return Colors.teal;
-    if (name.contains("PM 2.5")) return Colors.blueGrey;
-    if (name.contains("CO2")) return Colors.green;
-    if (name.contains("TVOC")) return Colors.brown;
-    return Colors.grey;
-  }
-
   Widget _buildSensorCard(Map<String, dynamic> data) {
-    // Base color for the sensor type
     Color baseColor = _getSensorColor(data['name']);
     Color statusColor = baseColor;
 
-    // Override color if there's a warning/alert
     if (data['status'] == 'warning') {
-      // Keep base color but maybe show an indicator,
-      // or shift towards orange/red if strictly required.
-      // For this design, let's keep the thematic color but use an indicator.
+      // Keep base color but indicator handles visual cue
     } else if (data['status'] == 'alert') {
       statusColor = Colors.red;
     }
@@ -824,18 +887,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           builder: (context) => PM25DetailScreen(
                               deviceId: selectedDeviceId,
                               sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'CO2') {
+                } else if (data['name'] == 'AQI') {
                   Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (context) => CO2DetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'TVOC') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => TVOCDetailScreen(
+                          builder: (context) => AQIDetailScreen(
                               deviceId: selectedDeviceId,
                               sessionCookie: _session.cookieHeader)));
                 }
@@ -845,7 +901,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20), // Smooth corners
+          borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.05),
@@ -854,57 +910,61 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        // ClipRRect ensures graph stays inside rounded corners
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: Stack(
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Colored Icon container
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: baseColor.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(10),
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: baseColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(data['icon'], color: baseColor, size: 20),
+                        ),
+                        if (isNavigable)
+                          Icon(Icons.chevron_right,
+                              size: 20, color: Colors.grey.shade300),
+                      ],
                     ),
-                    child: Icon(data['icon'], color: baseColor, size: 20),
-                  ),
-                  if (isNavigable)
-                    Icon(Icons.chevron_right,
-                        size: 20, color: Colors.grey.shade300),
-                ],
-              ),
-              const Spacer(),
-              Text(
-                data['value'],
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                data['name'],
-                style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 10),
-              // Foreground Graph Line (Sharp)
-              SizedBox(
-                height: 30,
-                width: double.infinity,
-                child: CustomPaint(
-                  painter: SparklinePainter(
-                    data: history,
-                    color: baseColor,
-                    lineWidth: 2.5,
-                    fill: false,
-                  ),
+                    const Spacer(),
+                    Text(
+                      data['value'],
+                      style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      data['name'],
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey.shade600,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      height: 30,
+                      width: double.infinity,
+                      child: CustomPaint(
+                        painter: SparklinePainter(
+                          data: history,
+                          color: baseColor,
+                          lineWidth: 2.5,
+                          fill: false,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -948,6 +1008,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onTap: () => Navigator.pop(context),
             ),
             ListTile(
+              leading:
+                  const Icon(Icons.notifications_active, color: Colors.grey),
+              title: const Text('Alert Settings',
+                  style: TextStyle(color: Colors.black87)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const AlertSettingsScreen()));
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.settings, color: Colors.grey),
               title: const Text('Settings',
                   style: TextStyle(color: Colors.black87)),
@@ -971,7 +1044,7 @@ class SparklinePainter extends CustomPainter {
   final List<double> data;
   final Color color;
   final double lineWidth;
-  final bool fill; // Added fill property
+  final bool fill;
 
   SparklinePainter({
     required this.data,
@@ -993,7 +1066,6 @@ class SparklinePainter extends CustomPainter {
 
     final path = Path();
 
-    // Calculate Y range with padding to prevent edge clipping
     double minVal = data.reduce(min);
     double maxVal = data.reduce(max);
     double range = maxVal - minVal;
@@ -1002,7 +1074,6 @@ class SparklinePainter extends CustomPainter {
       range = 1.0;
       minVal -= 0.5;
     } else {
-      // Add 10% padding to top and bottom
       minVal -= range * 0.1;
       maxVal += range * 0.1;
       range = maxVal - minVal;
@@ -1010,7 +1081,6 @@ class SparklinePainter extends CustomPainter {
 
     double dx = size.width / (data.length - 1);
 
-    // Smooth Curve Logic (Quadratic Bezier)
     for (int i = 0; i < data.length; i++) {
       double normalizeVal = (data[i] - minVal) / range;
       double x = i * dx;
@@ -1019,25 +1089,19 @@ class SparklinePainter extends CustomPainter {
       if (i == 0) {
         path.moveTo(x, y);
       } else {
-        // Use cubicTo for smoother curves, or generic lineTo
-        // For simple sparklines, lineTo is cleaner, but let's smooth it slightly
         double prevX = (i - 1) * dx;
         double prevNormalizeVal = (data[i - 1] - minVal) / range;
         double prevY = size.height - (prevNormalizeVal * size.height);
-
-        // Simple smoothing: control point is halfway
         double cX = (prevX + x) / 2;
         path.cubicTo(cX, prevY, cX, y, x, y);
       }
     }
 
     if (fill) {
-      // Close the path for filling
       path.lineTo(size.width, size.height);
       path.lineTo(0, size.height);
       path.close();
 
-      // Use shader for gradient fill
       paint.style = PaintingStyle.fill;
       paint.shader = LinearGradient(
         begin: Alignment.topCenter,

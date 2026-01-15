@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'dart:convert';
 
 class GoogleFonts {
   static TextStyle inter({
@@ -21,25 +23,26 @@ class GoogleFonts {
   }
 }
 
-class CO2DetailScreen extends StatefulWidget {
+class AQIDetailScreen extends StatefulWidget {
   final String deviceId;
   final String sessionCookie;
 
-  const CO2DetailScreen({
+  const AQIDetailScreen({
     super.key,
     required this.deviceId,
     required this.sessionCookie,
   });
 
   @override
-  State<CO2DetailScreen> createState() => _CO2DetailScreenState();
+  State<AQIDetailScreen> createState() => _AQIDetailScreenState();
 }
 
-class _CO2DetailScreenState extends State<CO2DetailScreen> {
+class _AQIDetailScreenState extends State<AQIDetailScreen> {
   // --- STATE ---
   String _selectedRange = "24h";
   List<GraphPoint> _graphData = [];
   bool _isLoading = true;
+  String _errorMessage = "";
 
   // Stats
   double maxVal = 0.0;
@@ -48,22 +51,125 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
   String maxTime = "--";
   String minTime = "--";
 
+  // Configuration
+  final String _baseUrl = "https://gridsphere.in/station/api";
+  final String _userAgent = "FlutterApp";
+
   @override
   void initState() {
     super.initState();
-    _generateMockData(_selectedRange);
+    // Try to fetch real data first, fallback to mock if key missing
+    _fetchHistoryData(_selectedRange);
+  }
+
+  // --- DATA FETCHING ---
+  Future<void> _fetchHistoryData(String range) async {
+    setState(() {
+      _isLoading = true;
+      _selectedRange = range;
+      _errorMessage = "";
+      _graphData = [];
+    });
+
+    try {
+      String apiRange = 'daily';
+      if (range == '7d') apiRange = 'weekly';
+      if (range == '30d') apiRange = 'monthly';
+
+      final response = await http.get(
+        Uri.parse(
+            '$_baseUrl/devices/${widget.deviceId}/history?range=$apiRange'),
+        headers: {
+          'Cookie': widget.sessionCookie,
+          'User-Agent': _userAgent,
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> rawData = [];
+
+        if (jsonResponse is Map && jsonResponse.containsKey('data')) {
+          rawData = jsonResponse['data'];
+        } else if (jsonResponse is List) {
+          rawData = jsonResponse;
+        }
+
+        if (rawData.isNotEmpty) {
+          List<GraphPoint> points = [];
+          double sum = 0;
+          double localMax = -999;
+          double localMin = 9999;
+          String localMaxTime = "--";
+          String localMinTime = "--";
+          bool foundRealData = false;
+
+          for (var item in rawData) {
+            // Check if backend provides 'aqi', otherwise we might need to fallback
+            if (item['aqi'] == null) continue;
+
+            foundRealData = true;
+            double val = double.tryParse(item['aqi'].toString()) ?? 0.0;
+
+            String timeStr = item['timestamp']?.toString() ?? "";
+            DateTime time = DateTime.now();
+            if (timeStr.isNotEmpty) {
+              try {
+                time = DateTime.parse(timeStr.replaceAll(' ', 'T'));
+              } catch (_) {}
+            }
+
+            points.add(GraphPoint(val, time));
+
+            sum += val;
+            if (val > localMax) {
+              localMax = val;
+              localMaxTime = _formatTimeForStat(time, range);
+            }
+            if (val < localMin) {
+              localMin = val;
+              localMinTime = _formatTimeForStat(time, range);
+            }
+          }
+
+          // If no 'aqi' key was found in the real response, generate mock data
+          if (!foundRealData || points.isEmpty) {
+            _generateMockData(range);
+            return;
+          }
+
+          points.sort((a, b) => a.time.compareTo(b.time));
+
+          if (mounted) {
+            setState(() {
+              _graphData = points;
+              maxVal = localMax == -999 ? 0 : localMax;
+              minVal = localMin == 9999 ? 0 : localMin;
+              avgVal = points.isEmpty ? 0 : sum / points.length;
+              maxTime = localMaxTime;
+              minTime = localMinTime;
+              _isLoading = false;
+            });
+          }
+        } else {
+          _generateMockData(range); // Fallback on empty data
+        }
+      } else {
+        _generateMockData(range); // Fallback on server error
+      }
+    } catch (e) {
+      debugPrint("Error fetching AQI history: $e");
+      _generateMockData(range); // Fallback on connection error
+    }
   }
 
   // --- MOCK DATA GENERATION ---
   Future<void> _generateMockData(String range) async {
-    setState(() {
-      _isLoading = true;
-      _selectedRange = range;
-      _graphData = [];
-    });
+    // Simulate network delay if falling back immediately
+    await Future.delayed(const Duration(milliseconds: 500));
 
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted) return;
 
     Random r = Random();
     int pointsCount = range == '24h'
@@ -80,20 +186,19 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
     String localMaxTime = "--";
     String localMinTime = "--";
 
-    // Base CO2 level (ppm)
-    // 400 is outdoor, 600-800 indoor normal, >1000 stuffy
-    double baseValue = 550.0;
+    // Base AQI level (0-500 scale)
+    double baseValue = 85.0; // Moderate start
 
     for (int i = 0; i < pointsCount; i++) {
       // Simulate fluctuation
-      double noise = (r.nextDouble() * 150) - 75;
+      double noise = (r.nextDouble() * 40) - 20;
       double val = baseValue + noise;
 
-      // Spike logic (e.g. windows closed)
-      if (r.nextDouble() > 0.8) val += 300;
+      // Random pollution spike
+      if (r.nextDouble() > 0.9) val += 60;
 
-      // Ensure positive values
-      if (val < 400) val = 400 + r.nextDouble() * 20;
+      // Ensure valid range
+      if (val < 10) val = 10 + r.nextDouble() * 5;
 
       DateTime time;
       if (range == '24h') {
@@ -133,18 +238,22 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
     return DateFormat('MMM d').format(dt);
   }
 
-  // --- AI Insights Logic for CO2 ---
+  // --- AI Insights Logic for AQI ---
   String _getAIInsight() {
     if (_graphData.isEmpty) return "Gathering data...";
 
-    if (avgVal > 1500) {
-      return "🔴 Poor Air Quality. CO2 levels > 1500 ppm. May cause drowsiness and poor concentration. Ventilation required immediately.";
-    } else if (avgVal > 1000) {
-      return "🟠 Moderate to High. Air is getting stale. Recommend opening windows or increasing air exchange.";
-    } else if (avgVal > 600) {
-      return "🟡 Acceptable Indoor Quality. Standard levels for occupied spaces.";
+    if (avgVal > 300) {
+      return "☠️ Hazardous. Emergency conditions. Everyone is likely to be affected. Avoid all outdoor exertion.";
+    } else if (avgVal > 200) {
+      return "🟣 Very Unhealthy. Health alert: everyone may experience more serious health effects.";
+    } else if (avgVal > 150) {
+      return "🔴 Unhealthy. Everyone may begin to experience health effects; members of sensitive groups may experience more serious health effects.";
+    } else if (avgVal > 100) {
+      return "🟠 Unhealthy for Sensitive Groups. Members of sensitive groups may experience health effects. The general public is not likely to be affected.";
+    } else if (avgVal > 50) {
+      return "🟡 Moderate. Air quality is acceptable; however, for some pollutants there may be a moderate health concern for a very small number of people.";
     } else {
-      return "🟢 Excellent Air Quality. Levels are close to outdoor ambient baseline (400 ppm).";
+      return "🟢 Good. Air quality is considered satisfactory, and air pollution poses little or no risk.";
     }
   }
 
@@ -159,7 +268,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text("CO2 Levels"),
+        title: const Text("Air Quality Index"),
         elevation: 0,
         backgroundColor: Colors.white,
         centerTitle: true,
@@ -204,20 +313,20 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
               children: [
                 Expanded(
                   child: _buildStatBox(
-                    "Max CO2",
-                    "${maxVal.toStringAsFixed(0)} ppm",
-                    Icons.cloud,
-                    Colors.green.shade800,
+                    "Max AQI",
+                    "${maxVal.toStringAsFixed(0)}",
+                    Icons.warning_amber_rounded,
+                    Colors.cyan.shade800,
                     maxTime,
                   ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: _buildStatBox(
-                    "Min CO2",
-                    "${minVal.toStringAsFixed(0)} ppm",
-                    Icons.cloud_outlined,
-                    Colors.green.shade400,
+                    "Min AQI",
+                    "${minVal.toStringAsFixed(0)}",
+                    Icons.check_circle_outline,
+                    Colors.cyan.shade400,
                     minTime,
                   ),
                 ),
@@ -241,11 +350,11 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.1),
+                          color: Colors.cyan.withOpacity(0.1),
                           shape: BoxShape.circle,
                         ),
                         child: const Icon(Icons.show_chart,
-                            color: Colors.green, size: 20),
+                            color: Colors.cyan, size: 20),
                       ),
                       const SizedBox(width: 12),
                       Text(
@@ -256,7 +365,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
                     ],
                   ),
                   Text(
-                    "${avgVal.toStringAsFixed(0)} ppm",
+                    "${avgVal.toStringAsFixed(0)}",
                     style: GoogleFonts.inter(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -289,7 +398,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
                   Padding(
                     padding: const EdgeInsets.only(left: 8.0),
                     child: Text(
-                      "Concentration Trend",
+                      "AQI Trend",
                       style: GoogleFonts.inter(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -304,14 +413,24 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
                     child: _isLoading
                         ? const Center(
                             child:
-                                CircularProgressIndicator(color: Colors.green))
-                        : CustomPaint(
-                            painter: _DetailedChartPainter(
-                              dataPoints: _graphData,
-                              color: Colors.green,
-                              range: _selectedRange,
-                            ),
-                          ),
+                                CircularProgressIndicator(color: Colors.cyan))
+                        : _graphData.isEmpty
+                            ? Center(
+                                child: Text(
+                                  "No Data Available",
+                                  style: GoogleFonts.inter(
+                                    color: Colors.grey.shade500,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              )
+                            : CustomPaint(
+                                painter: _DetailedChartPainter(
+                                  dataPoints: _graphData,
+                                  color: Colors.cyan,
+                                  range: _selectedRange,
+                                ),
+                              ),
                   ),
                 ],
               ),
@@ -329,15 +448,15 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.green.shade50, Colors.white],
+          colors: [Colors.cyan.shade50, Colors.white],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green.shade100),
+        border: Border.all(color: Colors.cyan.shade100),
         boxShadow: [
           BoxShadow(
-            color: Colors.green.withOpacity(0.05),
+            color: Colors.cyan.withOpacity(0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -351,7 +470,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
             style: GoogleFonts.inter(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: Colors.green.shade800,
+              color: Colors.cyan.shade800,
             ),
           ),
           const SizedBox(height: 12),
@@ -359,7 +478,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
             _getAIInsight(),
             style: GoogleFonts.inter(
               fontSize: 14,
-              color: Colors.green.shade900,
+              color: Colors.cyan.shade900,
               height: 1.5,
             ),
           ),
@@ -372,7 +491,7 @@ class _CO2DetailScreenState extends State<CO2DetailScreen> {
     final isSelected = _selectedRange == rangeKey;
     return Expanded(
       child: GestureDetector(
-        onTap: () => _generateMockData(rangeKey),
+        onTap: () => _fetchHistoryData(rangeKey),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
@@ -483,22 +602,14 @@ class _DetailedChartPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    final fillPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [color.withOpacity(0.2), color.withOpacity(0.0)],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height))
-      ..style = PaintingStyle.fill;
-
     double minVal = dataPoints.map((e) => e.value).reduce(min);
     double maxVal = dataPoints.map((e) => e.value).reduce(max);
 
     double yRange = maxVal - minVal;
     if (yRange == 0) {
-      yRange = 10;
-      minVal -= 5;
-      maxVal += 5;
+      yRange = 50;
+      minVal -= 25;
+      maxVal += 25;
     } else {
       minVal -= yRange * 0.1;
       maxVal += yRange * 0.1;
@@ -528,7 +639,6 @@ class _DetailedChartPainter extends CustomPainter {
     }
 
     final path = Path();
-    final fillPath = Path();
 
     double dx = 0;
     if (dataPoints.length > 1) {
@@ -547,8 +657,6 @@ class _DetailedChartPainter extends CustomPainter {
 
       if (i == 0) {
         path.moveTo(x, y);
-        fillPath.moveTo(x, size.height);
-        fillPath.lineTo(x, y);
       } else {
         double prevX = paddingLeft + ((i - 1) * dx);
         double prevNormalizeVal = (dataPoints[i - 1].value - minVal) / yRange;
@@ -561,19 +669,10 @@ class _DetailedChartPainter extends CustomPainter {
         double controlY2 = y;
 
         path.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
-        fillPath.cubicTo(controlX1, controlY1, controlX2, controlY2, x, y);
       }
     }
 
-    if (dataPoints.length > 1) {
-      fillPath.lineTo(paddingLeft + chartWidth, size.height);
-      fillPath.lineTo(paddingLeft, size.height);
-    } else {
-      fillPath.lineTo(size.width / 2, size.height);
-    }
-    fillPath.close();
-
-    canvas.drawPath(fillPath, fillPaint);
+    // Only drawing the path (stroke), no fill
     canvas.drawPath(path, paint);
 
     int labelCount = 5;
