@@ -6,16 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/session_manager.dart';
 
-// Import detailed screens
-import '../detailed_screens/temperature.dart';
-import '../detailed_screens/humidity.dart';
-import '../detailed_screens/rainfall.dart';
-import '../detailed_screens/light_intensity.dart';
-import '../detailed_screens/pressure.dart';
-import '../detailed_screens/wind_speed.dart';
-import '../detailed_screens/pm25.dart';
-import '../detailed_screens/aqi.dart';
-// import '../detailed_screens/tvoc.dart'; // Commented out until file is created
+// --- OPTIMIZATION: Use the Generic Sensor Screen ---
+import 'sensor_detail_screen.dart';
 
 // Import Alert Settings
 import 'alert_settings_screen.dart';
@@ -56,13 +48,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late PageController _pageController;
   int _currentPageIndex = 0;
 
+  // Mock data for fallback
+  final List<Map<String, dynamic>> _mockAirQualityData = [
+    {
+      'id': 'PM-01',
+      'name': 'PM 2.5',
+      'value': '15 µg/m³',
+      'status': 'normal',
+      'icon': Icons.grain,
+      'history': [12.0, 14.0, 15.0, 13.0, 15.0, 16.0],
+      'isNavigable': true
+    },
+    {
+      'id': 'CO2-02',
+      'name': 'CO2',
+      'value': '550 ppm',
+      'status': 'warning',
+      'icon': Icons.cloud,
+      'history': [500.0, 520.0, 550.0, 540.0, 560.0, 550.0],
+      'isNavigable': true
+    },
+    {
+      'id': 'TVOC-03',
+      'name': 'TVOC',
+      'value': '120 ppb',
+      'status': 'normal',
+      'icon': Icons.science,
+      'history': [100.0, 110.0, 120.0, 115.0, 118.0, 120.0],
+      'isNavigable': true
+    },
+  ];
+
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: 0);
     _initializeData();
 
-    // Periodic refresh
+    // Periodic refresh every 60 seconds
     _timer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (selectedDeviceId.isNotEmpty) {
         _refreshData();
@@ -76,6 +99,130 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _client.close();
     _pageController.dispose();
     super.dispose();
+  }
+
+  // --- CONFIGURATION FACTORY (Optimized Logic) ---
+  // Returns configuration object based on sensor name
+  SensorConfig _getSensorConfig(String name) {
+    if (name.contains("Temperature")) {
+      return SensorConfig(
+        title: "Temperature",
+        jsonKey: "temp", // API key for history
+        unit: "°C",
+        color: Colors.orange,
+        icon: Icons.thermostat,
+        insightLogic: (min, max, avg) =>
+            avg > 35 ? "Heat alert. High average temp." : "Conditions normal.",
+      );
+    }
+    if (name.contains("Humidity")) {
+      return SensorConfig(
+        title: "Humidity",
+        jsonKey: "humidity",
+        unit: "%",
+        color: Colors.blue,
+        icon: Icons.water_drop,
+        insightLogic: (min, max, avg) =>
+            avg > 80 ? "High humidity detected." : "Humidity is comfortable.",
+      );
+    }
+    if (name.contains("Rainfall")) {
+      return SensorConfig(
+        title: "Rainfall",
+        jsonKey: "rainfall",
+        unit: "mm",
+        color: Colors.indigo,
+        icon: Icons.cloudy_snowing,
+        insightLogic: (min, max, avg) =>
+            max > 10 ? "Heavy rain recorded." : "No significant rainfall.",
+      );
+    }
+    if (name.contains("Light")) {
+      return SensorConfig(
+        title: "Light Intensity",
+        jsonKey: "light_intensity",
+        unit: "lux",
+        color: Colors.amber,
+        icon: Icons.wb_sunny,
+        insightLogic: (min, max, avg) =>
+            avg > 50000 ? "Intense sunlight." : "Moderate light levels.",
+      );
+    }
+    if (name.contains("Pressure")) {
+      return SensorConfig(
+        title: "Pressure",
+        jsonKey: "pressure",
+        unit: "hPa",
+        color: Colors.deepPurple,
+        icon: Icons.speed,
+        insightLogic: (min, max, avg) =>
+            avg < 1000 ? "Low pressure system." : "Stable atmosphere.",
+      );
+    }
+    if (name.contains("Wind")) {
+      return SensorConfig(
+        title: "Wind Speed",
+        jsonKey: "wind_speed",
+        unit: "km/h",
+        color: Colors.teal,
+        icon: Icons.air,
+        insightLogic: (min, max, avg) =>
+            max > 30 ? "High wind alert." : "Calm winds.",
+      );
+    }
+    if (name.contains("PM 2.5")) {
+      return SensorConfig(
+        title: "PM 2.5",
+        jsonKey: "pm25",
+        unit: "µg/m³",
+        color: Colors.blueGrey,
+        icon: Icons.grain,
+        insightLogic: (min, max, avg) =>
+            avg > 35 ? "Unhealthy air quality." : "Air quality is good.",
+      );
+    }
+    if (name.contains("CO2")) {
+      return SensorConfig(
+        title: "CO2",
+        jsonKey: "co2",
+        unit: "ppm",
+        color: Colors.green,
+        icon: Icons.cloud,
+        insightLogic: (min, max, avg) =>
+            avg > 1000 ? "Poor ventilation." : "Fresh air.",
+      );
+    }
+    if (name.contains("TVOC")) {
+      return SensorConfig(
+        title: "TVOC",
+        jsonKey: "tvoc",
+        unit: "ppb",
+        color: Colors.brown,
+        icon: Icons.science,
+        insightLogic: (min, max, avg) =>
+            avg > 200 ? "High volatile compounds." : "Safe TVOC levels.",
+      );
+    }
+    if (name.contains("AQI")) {
+      return SensorConfig(
+        title: "AQI",
+        jsonKey: "aqi",
+        unit: "",
+        color: Colors.cyan,
+        icon: Icons.filter_drama,
+        insightLogic: (min, max, avg) =>
+            avg > 100 ? "Poor air quality." : "Good air quality.",
+      );
+    }
+
+    // Default Fallback
+    return SensorConfig(
+      title: name,
+      jsonKey: name.toLowerCase(),
+      unit: "",
+      color: Colors.grey,
+      icon: Icons.device_unknown,
+    );
   }
 
   // --- INITIALIZATION ---
@@ -125,12 +272,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (response.statusCode == 200 && mounted) {
         final dynamic data = jsonDecode(response.body);
         List<dynamic> deviceList = [];
-
-        if (data is List) {
+        if (data is List)
           deviceList = data;
-        } else if (data is Map) {
+        else if (data is Map)
           deviceList = data['data'] ?? data['devices'] ?? [];
-        }
 
         if (deviceList.isNotEmpty) {
           final prefs = await SharedPreferences.getInstance();
@@ -192,9 +337,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     DateTime.parse(timeStr.replaceAll(' ', 'T'));
                 Duration diff = DateTime.now().difference(readingTime);
                 if (diff.inMinutes > 90) isOffline = true;
-              } catch (e) {
-                debugPrint("Date Parse Error: $e");
-              }
+              } catch (_) {}
             }
 
             isDeviceOffline = isOffline;
@@ -245,29 +388,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
             : (jsonResponse['data'] ?? []);
 
         if (readings.isNotEmpty) {
-          List<double> extractList(String key) {
-            return readings
+          Map<String, List<double>> newHistory = {};
+          // Parse all keys
+          for (var key in [
+            'temp',
+            'humidity',
+            'rainfall',
+            'light_intensity',
+            'wind_speed',
+            'pressure',
+            'pm25',
+            'tvoc',
+            'aqi'
+          ]) {
+            newHistory[key] = readings
                 .map<double>((r) => double.tryParse(r[key].toString()) ?? 0.0)
+                .toList()
+                .reversed
                 .toList();
           }
 
-          Map<String, List<double>> newHistory = {};
-          newHistory['air_temp'] = extractList('temp');
-          newHistory['humidity'] = extractList('humidity');
-          newHistory['rainfall'] = extractList('rainfall');
-          newHistory['light_intensity'] = extractList('light_intensity');
-          newHistory['wind'] = extractList('wind_speed');
-          newHistory['pressure'] = extractList('pressure');
-          newHistory['pm25'] = extractList('pm25');
-          newHistory['tvoc'] = extractList('tvoc');
-          newHistory['aqi'] = extractList('aqi');
-
-          newHistory.forEach((key, list) {
-            newHistory[key] = list.reversed.toList();
-          });
-
           setState(() {
-            historyData = newHistory;
+            historyData = {
+              "air_temp": newHistory['temp']!,
+              "humidity": newHistory['humidity']!,
+              "rainfall": newHistory['rainfall']!,
+              "light_intensity": newHistory['light_intensity']!,
+              "wind": newHistory['wind_speed']!,
+              "pressure": newHistory['pressure']!,
+              "pm25": newHistory['pm25']!,
+              "tvoc": newHistory['tvoc']!,
+              "aqi": newHistory['aqi']!,
+            };
           });
         }
       }
@@ -336,122 +488,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // --- DATA HELPERS ---
-  List<Map<String, dynamic>> _getWeatherData() {
+  // --- UI HELPERS ---
+  List<Map<String, dynamic>> _getDisplayData(bool isWeather) {
     if (sensorData == null) return [];
+    String v(String k, String u) => "${sensorData![k]?.toString() ?? '--'} $u";
+    List<double> h(String k) => historyData[k] ?? [];
 
-    String val(String key, String unit) =>
-        "${sensorData![key]?.toString() ?? '--'} $unit";
-    double rawVal(String key) =>
-        double.tryParse(sensorData![key]?.toString() ?? '0') ?? 0;
-    List<double> hist(String key) => historyData[key] ?? [];
-
-    return [
-      {
-        'id': 'T-101',
-        'name': 'Temperature',
-        'value': val('air_temp', '°C'),
-        'status': rawVal('air_temp') > 40 ? 'alert' : 'normal',
-        'icon': Icons.thermostat,
-        'history': hist('air_temp'),
-        'isNavigable': true
-      },
-      {
-        'id': 'H-202',
-        'name': 'Humidity',
-        'value': val('humidity', '%'),
-        'status': rawVal('humidity') < 30 ? 'warning' : 'normal',
-        'icon': Icons.water_drop,
-        'history': hist('humidity'),
-        'isNavigable': true
-      },
-      {
-        'id': 'R-303',
-        'name': 'Rainfall',
-        'value': val('rainfall', 'mm'),
-        'status': 'normal',
-        'icon': Icons.cloudy_snowing,
-        'history': hist('rainfall'),
-        'isNavigable': true
-      },
-      {
-        'id': 'L-404',
-        'name': 'Light',
-        'value': val('light_intensity', 'lux'),
-        'status': 'normal',
-        'icon': Icons.wb_sunny,
-        'history': hist('light_intensity'),
-        'isNavigable': true
-      },
-      {
-        'id': 'P-505',
-        'name': 'Pressure',
-        'value': val('pressure', 'hPa'),
-        'status': 'normal',
-        'icon': Icons.speed,
-        'history': hist('pressure'),
-        'isNavigable': true
-      },
-      {
-        'id': 'W-606',
-        'name': 'Wind Speed',
-        'value': val('wind', 'km/h'),
-        'status': rawVal('wind') > 50 ? 'warning' : 'normal',
-        'icon': Icons.air,
-        'history': hist('wind'),
-        'isNavigable': true
-      },
-    ];
-  }
-
-  List<Map<String, dynamic>> _getAirQualityData() {
-    if (sensorData == null) return [];
-
-    String val(String key, String unit) =>
-        "${sensorData![key]?.toString() ?? '--'} $unit";
-    double rawVal(String key) =>
-        double.tryParse(sensorData![key]?.toString() ?? '0') ?? 0;
-    List<double> hist(String key) => historyData[key] ?? [];
-
-    return [
-      {
-        'id': 'AQI-00',
-        'name': 'AQI',
-        'value': val('aqi', ''),
-        'status': rawVal('aqi') > 100 ? 'warning' : 'normal',
-        'icon': Icons.filter_drama,
-        'history': hist('aqi'),
-        'isNavigable': true
-      },
-      {
-        'id': 'PM-01',
-        'name': 'PM 2.5',
-        'value': val('pm25', 'µg/m³'),
-        'status': rawVal('pm25') > 35 ? 'warning' : 'normal',
-        'icon': Icons.grain,
-        'history': hist('pm25'),
-        'isNavigable': true
-      },
-      {
-        'id': 'TVOC-03', 'name': 'TVOC', 'value': val('tvoc', 'ppb'),
-        'status': rawVal('tvoc') > 400 ? 'warning' : 'normal',
-        'icon': Icons.science, 'history': hist('tvoc'),
-        'isNavigable': false // Until screen exists
-      },
-    ];
-  }
-
-  Color _getSensorColor(String name) {
-    if (name.contains("Temperature")) return Colors.orange;
-    if (name.contains("Humidity")) return Colors.blue;
-    if (name.contains("Rainfall")) return Colors.indigo;
-    if (name.contains("Light")) return Colors.amber;
-    if (name.contains("Pressure")) return Colors.deepPurple;
-    if (name.contains("Wind")) return Colors.teal;
-    if (name.contains("PM 2.5")) return Colors.blueGrey;
-    if (name.contains("TVOC")) return Colors.brown;
-    if (name.contains("AQI")) return Colors.cyan;
-    return Colors.grey;
+    if (isWeather) {
+      return [
+        {'n': 'Temperature', 'v': v('air_temp', '°C'), 'h': h('air_temp')},
+        {'n': 'Humidity', 'v': v('humidity', '%'), 'h': h('humidity')},
+        {'n': 'Rainfall', 'v': v('rainfall', 'mm'), 'h': h('rainfall')},
+        {
+          'n': 'Light Intensity',
+          'v': v('light_intensity', 'lux'),
+          'h': h('light_intensity')
+        },
+        {'n': 'Pressure', 'v': v('pressure', 'hPa'), 'h': h('pressure')},
+        {'n': 'Wind Speed', 'v': v('wind', 'km/h'), 'h': h('wind')},
+      ];
+    } else {
+      return [
+        {'n': 'AQI', 'v': v('aqi', ''), 'h': h('aqi')},
+        {'n': 'PM 2.5', 'v': v('pm25', 'µg/m³'), 'h': h('pm25')},
+        {'n': 'TVOC', 'v': v('tvoc', 'ppb'), 'h': h('tvoc')},
+      ];
+    }
   }
 
   @override
@@ -525,9 +587,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   });
                 },
                 children: [
-                  _buildPageContent("Weather Readings", _getWeatherData()),
+                  _buildPageContent("Weather Readings", _getDisplayData(true)),
                   _buildPageContent(
-                      "Air Quality Readings", _getAirQualityData()),
+                      "Air Quality Readings", _getDisplayData(false)),
                 ],
               ),
             ),
@@ -803,7 +865,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildSensorGrid(List<Map<String, dynamic>> data) {
+  Widget _buildSensorGrid(List<Map<String, dynamic>> items) {
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -813,91 +875,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
         mainAxisSpacing: 12,
         childAspectRatio: 0.95,
       ),
-      itemCount: data.length,
+      itemCount: items.length,
       itemBuilder: (context, index) {
-        final item = data[index];
-        return _buildSensorCard(item);
+        final item = items[index];
+        final config = _getSensorConfig(item['n']);
+        return _buildSensorCard(item, config);
       },
     );
   }
 
-  Widget _buildSensorCard(Map<String, dynamic> data) {
-    Color baseColor = _getSensorColor(data['name']);
-    Color statusColor = baseColor;
-
-    if (data['status'] == 'warning') {
-      // Keep base color but indicator handles visual cue
-    } else if (data['status'] == 'alert') {
-      statusColor = Colors.red;
-    }
-
-    List<double> history = data['history'] ?? [];
-    bool isNavigable = data['isNavigable'] == true;
+  Widget _buildSensorCard(Map<String, dynamic> item, SensorConfig config) {
+    // Determine status color: alert > base
+    // You can refine this logic to check item['v'] against thresholds if you wish.
+    Color baseColor = config.color;
 
     return GestureDetector(
-      onTap: isNavigable
-          ? () {
-              if (selectedDeviceId.isNotEmpty) {
-                if (data['name'] == 'Temperature') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => TemperatureDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'Humidity') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => HumidityDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'Rainfall') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => RainfallDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'Light') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => LightIntensityDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'Pressure') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => PressureDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'Wind Speed') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => WindSpeedDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'PM 2.5') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => PM25DetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                } else if (data['name'] == 'AQI') {
-                  Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => AQIDetailScreen(
-                              deviceId: selectedDeviceId,
-                              sessionCookie: _session.cookieHeader)));
-                }
-              }
-            }
-          : null,
+      onTap: () {
+        if (selectedDeviceId.isNotEmpty) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => SensorDetailScreen(
+                deviceId: selectedDeviceId,
+                sessionCookie: _session.cookieHeader,
+                config: config,
+              ),
+            ),
+          );
+        }
+      },
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -925,19 +931,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: baseColor.withOpacity(0.1),
+                            color: config.color.withOpacity(0.1),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: Icon(data['icon'], color: baseColor, size: 20),
+                          child:
+                              Icon(config.icon, color: config.color, size: 20),
                         ),
-                        if (isNavigable)
-                          Icon(Icons.chevron_right,
-                              size: 20, color: Colors.grey.shade300),
+                        Icon(Icons.chevron_right,
+                            size: 20, color: Colors.grey.shade300),
                       ],
                     ),
                     const Spacer(),
                     Text(
-                      data['value'],
+                      item['v'],
                       style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -945,7 +951,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      data['name'],
+                      item['n'],
                       style: TextStyle(
                           fontSize: 13,
                           color: Colors.grey.shade600,
@@ -957,8 +963,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       width: double.infinity,
                       child: CustomPaint(
                         painter: SparklinePainter(
-                          data: history,
-                          color: baseColor,
+                          data: item['h'],
+                          color: config.color,
                           lineWidth: 2.5,
                           fill: false,
                         ),
