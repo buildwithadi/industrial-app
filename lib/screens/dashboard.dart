@@ -459,17 +459,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
         farmerName = "Aditya Farm";
         deviceStatus = "Online";
         lastOnline = "Today, 10:30 AM";
+
+        // --- CHANGED: Explicitly set mock data to ZEROs ---
         sensorData = {
-          "air_temp": 25.5,
-          "humidity": 60.0,
+          "air_temp": 0.0,
+          "humidity": 0.0,
           "rainfall": 0.0,
-          "light_intensity": 1200.0,
-          "wind": 12.0,
-          "pressure": 1013.0,
-          "pm25": 12.0,
-          "tvoc": 100.0,
-          "aqi": 45.0,
-          "co2": 500.0,
+          "light_intensity": 0.0,
+          "wind": 0.0,
+          "pressure": 0.0,
+          "pm25": 0.0,
+          "tvoc": 0.0,
+          "aqi": 0.0,
+          "co2": 0.0,
+        };
+        // Reset history to list of zeros for flat line
+        historyData = {
+          "air_temp": List.filled(10, 0.0),
+          "humidity": List.filled(10, 0.0),
+          "rainfall": List.filled(10, 0.0),
+          "light_intensity": List.filled(10, 0.0),
+          "wind": List.filled(10, 0.0),
+          "pressure": List.filled(10, 0.0),
+          "pm25": List.filled(10, 0.0),
+          "tvoc": List.filled(10, 0.0),
+          "aqi": List.filled(10, 0.0),
+          "co2": List.filled(10, 0.0),
         };
       });
     }
@@ -478,9 +493,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // --- UI HELPERS ---
   // Modified to filter based on Role AND individual Visibility Settings
   List<Map<String, dynamic>> _getDataForPage(bool isWeather) {
-    if (sensorData == null) return [];
-    String v(String k, String u) => "${sensorData![k]?.toString() ?? '--'} $u";
-    List<double> h(String k) => historyData[k] ?? [];
+    // --- CHANGED: Use a fallback empty map if sensorData is null, but populate with zeros ---
+    // This ensures cards are built even if data is missing, but they show 0.
+    final data = sensorData ??
+        {
+          "air_temp": 0.0,
+          "humidity": 0.0,
+          "rainfall": 0.0,
+          "light_intensity": 0.0,
+          "wind": 0.0,
+          "pressure": 0.0,
+          "pm25": 0.0,
+          "tvoc": 0.0,
+          "aqi": 0.0,
+          "co2": 0.0
+        };
+
+    String v(String k, String u) => "${data[k]?.toString() ?? '0.0'} $u";
+    // Modified: Ensure list is never null, use a list of 0.0s if empty/null
+    List<double> h(String k) {
+      final list = historyData[k];
+      if (list == null || list.isEmpty) {
+        // Return 20 zeros for a straight line
+        return List.filled(20, 0.0);
+      }
+      return list;
+    }
 
     List<Map<String, dynamic>> items = [];
 
@@ -635,15 +673,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Padding(
                         padding: EdgeInsets.all(32.0),
                         child: CircularProgressIndicator()))
-                : data.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(32.0),
-                          child: Text("No visible sensors for this role.",
-                              style: TextStyle(color: Colors.grey.shade500)),
-                        ),
-                      )
-                    : _buildSensorGrid(data),
+                : _buildSensorGrid(
+                    data), // --- CHANGED: Always build grid, even if data is empty (handled by helpers now)
             const SizedBox(height: 20),
           ],
         ),
@@ -656,8 +687,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildSensorGrid(List<Map<String, dynamic>> items) {
+    // --- CHANGED: If items is empty (e.g. all filtered out), show message
+    if (items.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Text("No visible sensors for this role.",
+              style: TextStyle(color: Colors.grey.shade500)),
+        ),
+      );
+    }
+
     return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 5),
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -678,6 +720,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Color activeColor = config.color;
     bool isAlert = false;
 
+    // Safety: check status if it exists
     if (item['status'] == 'warning') {
       activeColor = Colors.orange;
       isAlert = true;
@@ -764,6 +807,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildNoDataState() {
+    return Center(
+        child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(children: [
+              Icon(Icons.cloud_off, size: 60, color: Colors.grey.shade300),
+              const SizedBox(height: 16),
+              Text("No Data Available",
+                  style: TextStyle(color: Colors.grey.shade500))
+            ])));
   }
 
   Widget _buildCategoryToggle() {
@@ -1008,31 +1063,46 @@ class SparklinePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final path = Path();
-    double minVal = data.reduce(min);
-    double maxVal = data.reduce(max);
-    double range = maxVal - minVal;
-    if (range == 0) {
-      range = 1.0;
-      minVal -= 0.5;
+
+    // --- UPDATED LOGIC FOR FLAT LINE ---
+    // If all values are the same (e.g. all 0.0), or only 1 value, or if range is tiny
+    bool isFlat = data.every((e) => e == data[0]);
+
+    if (isFlat) {
+      // Draw straight line in middle
+      path.moveTo(0, size.height / 2);
+      path.lineTo(size.width, size.height / 2);
     } else {
-      minVal -= range * 0.1;
-      maxVal += range * 0.1;
-      range = maxVal - minVal;
-    }
-    double dx = size.width / (data.length - 1);
-    for (int i = 0; i < data.length; i++) {
-      double x = i * dx;
-      double y = size.height - ((data[i] - minVal) / range) * size.height;
-      if (i == 0)
-        path.moveTo(x, y);
-      else {
-        double prevX = (i - 1) * dx;
-        double prevY =
-            size.height - ((data[i - 1] - minVal) / range) * size.height;
-        double cX = (prevX + x) / 2;
-        path.cubicTo(cX, prevY, cX, y, x, y);
+      double minVal = data.reduce(min);
+      double maxVal = data.reduce(max);
+      double range = maxVal - minVal;
+
+      // Safety padding for range
+      if (range == 0) {
+        range = 1.0;
+        minVal -= 0.5;
+      } else {
+        minVal -= range * 0.1;
+        maxVal += range * 0.1;
+        range = maxVal - minVal;
+      }
+
+      double dx = size.width / (data.length - 1);
+      for (int i = 0; i < data.length; i++) {
+        double x = i * dx;
+        double y = size.height - ((data[i] - minVal) / range) * size.height;
+        if (i == 0)
+          path.moveTo(x, y);
+        else {
+          double prevX = (i - 1) * dx;
+          double prevY =
+              size.height - ((data[i - 1] - minVal) / range) * size.height;
+          double cX = (prevX + x) / 2;
+          path.cubicTo(cX, prevY, cX, y, x, y);
+        }
       }
     }
+
     canvas.drawPath(path, paint);
   }
 

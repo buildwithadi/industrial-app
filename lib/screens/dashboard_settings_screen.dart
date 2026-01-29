@@ -26,6 +26,20 @@ class _DashboardSettingsScreenState extends State<DashboardSettingsScreen> {
     'AQI'
   ];
 
+  // Icons for visual flair
+  final Map<String, IconData> _sensorIcons = {
+    'Temperature': Icons.thermostat,
+    'Humidity': Icons.water_drop,
+    'Rainfall': Icons.cloudy_snowing,
+    'Light Intensity': Icons.wb_sunny,
+    'Pressure': Icons.speed,
+    'Wind Speed': Icons.air,
+    'PM 2.5': Icons.grain,
+    'CO2': Icons.cloud,
+    'TVOC': Icons.science,
+    'AQI': Icons.filter_drama,
+  };
+
   // Map to store current visibility state
   Map<String, bool> _visibility = {};
   bool _isLoading = true;
@@ -64,43 +78,86 @@ class _DashboardSettingsScreenState extends State<DashboardSettingsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text("Dashboard Layout"),
+        title: const Text(
+          "Dashboard Layout",
+          style: TextStyle(
+              color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 18),
+        ),
         backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 1,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon:
+              const Icon(Icons.arrow_back_ios, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: _allSensors.length,
-              itemBuilder: (context, index) {
-                final sensor = _allSensors[index];
-                final isVisible = _visibility[sensor] ?? true;
-
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: SwitchListTile(
-                    title: Text(
-                      sensor,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                const Text(
+                  "Visible Parameters",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ..._allSensors.map((sensor) {
+                  final isVisible = _visibility[sensor] ?? true;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.03),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                    subtitle: Text(
-                      isVisible ? "Visible on Dashboard" : "Hidden",
-                      style: TextStyle(
-                        color: isVisible ? Colors.green : Colors.grey,
-                        fontSize: 12,
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      leading: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isVisible
+                              ? Theme.of(context).primaryColor.withOpacity(0.1)
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          _sensorIcons[sensor] ?? Icons.sensors,
+                          color: isVisible
+                              ? Theme.of(context).primaryColor
+                              : Colors.grey,
+                          size: 24,
+                        ),
+                      ),
+                      title: Text(
+                        sensor,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isVisible ? Colors.black87 : Colors.grey,
+                        ),
+                      ),
+                      trailing: Switch.adaptive(
+                        value: isVisible,
+                        activeColor: Theme.of(context).primaryColor,
+                        onChanged: (val) => _toggleSensor(sensor, val),
                       ),
                     ),
-                    value: isVisible,
-                    activeColor: Theme.of(context).primaryColor,
-                    onChanged: (val) => _toggleSensor(sensor, val),
-                  ),
-                );
-              },
+                  );
+                }).toList(),
+              ],
             ),
     );
   }

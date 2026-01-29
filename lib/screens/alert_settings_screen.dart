@@ -50,7 +50,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     _loadSettings();
   }
 
-  // Helper to generate a unique key like "101_air_temp_max"
   String _getKey(String sensorKey, String suffix) =>
       '${widget.deviceId}_${sensorKey}_$suffix';
 
@@ -59,7 +58,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     for (var sensor in _sensors) {
       String key = _sensorKeys[sensor]!;
 
-      // Load device-specific settings
       _minControllers[sensor] = TextEditingController(
           text: prefs.getDouble(_getKey(key, 'min'))?.toString() ?? '');
       _maxControllers[sensor] = TextEditingController(
@@ -72,8 +70,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Also save a flag indicating this device has active alerts configured
-    // This helps the background service decide quickly whether to process this device
     bool anyEnabled = _enabled.values.any((e) => e == true);
     await prefs.setBool('${widget.deviceId}_has_alerts', anyEnabled);
 
@@ -99,19 +95,19 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alert settings saved for this unit')),
+        const SnackBar(
+          content: Text('Alert settings saved successfully'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
 
   @override
   void dispose() {
-    for (var c in _minControllers.values) {
-      c.dispose();
-    }
-    for (var c in _maxControllers.values) {
-      c.dispose();
-    }
+    for (var c in _minControllers.values) c.dispose();
+    for (var c in _maxControllers.values) c.dispose();
     super.dispose();
   }
 
@@ -120,32 +116,55 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: Text("Alerts: Unit ${widget.deviceId}"),
+        title: Text(
+          "Alerts: Unit ${widget.deviceId}",
+          style: const TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
         backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 1,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon:
+              const Icon(Icons.arrow_back_ios, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.save),
+            icon: const Icon(Icons.check_circle_outline,
+                color: Colors.blue, size: 28),
             onPressed: _saveSettings,
+            tooltip: "Save Settings",
           )
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : ListView.builder(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               itemCount: _sensors.length,
               itemBuilder: (context, index) {
                 String sensor = _sensors[index];
-                return Card(
+                bool isEnabled = _enabled[sensor] ?? false;
+
+                return Container(
                   margin: const EdgeInsets.only(bottom: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  elevation: 0, // Flat style to match new design
-                  color: Colors.white,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.03),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(20.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -154,14 +173,14 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                           children: [
                             Text(
                               sensor,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.black87,
+                                color: isEnabled ? Colors.black87 : Colors.grey,
                               ),
                             ),
-                            Switch(
-                              value: _enabled[sensor]!,
+                            Switch.adaptive(
+                              value: isEnabled,
                               onChanged: (val) {
                                 setState(() {
                                   _enabled[sensor] = val;
@@ -171,45 +190,21 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                             ),
                           ],
                         ),
-                        if (_enabled[sensor]!) ...[
+                        if (isEnabled) ...[
                           const SizedBox(height: 16),
                           Row(
                             children: [
                               Expanded(
-                                child: TextFormField(
-                                  controller: _minControllers[sensor],
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                          decimal: true),
-                                  decoration: InputDecoration(
-                                    labelText: "Min Threshold",
-                                    labelStyle: TextStyle(
-                                        color: Colors.grey.shade600,
-                                        fontSize: 12),
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8)),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 8),
-                                  ),
+                                child: _buildThresholdInput(
+                                  _minControllers[sensor]!,
+                                  "Min Threshold",
                                 ),
                               ),
                               const SizedBox(width: 16),
                               Expanded(
-                                child: TextFormField(
-                                  controller: _maxControllers[sensor],
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                          decimal: true),
-                                  decoration: InputDecoration(
-                                    labelText: "Max Threshold",
-                                    labelStyle: TextStyle(
-                                        color: Colors.grey.shade600,
-                                        fontSize: 12),
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8)),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 8),
-                                  ),
+                                child: _buildThresholdInput(
+                                  _maxControllers[sensor]!,
+                                  "Max Threshold",
                                 ),
                               ),
                             ],
@@ -221,6 +216,33 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                 );
               },
             ),
+    );
+  }
+
+  Widget _buildThresholdInput(TextEditingController controller, String label) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+        filled: true,
+        fillColor: const Color(0xFFFAFAFA),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.blue, width: 1.5),
+        ),
+      ),
     );
   }
 }
