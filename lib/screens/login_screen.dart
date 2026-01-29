@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import '/services/session_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/session_manager.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -22,7 +23,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _client.close(); // Cancel any pending requests
+    _client.close();
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -35,10 +36,10 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _isLoading = true);
 
       try {
-        // STEP 1: Use Manager to ensure we have a CSRF token
+        // STEP 1: Ensure CSRF token
         final csrf = await _session.ensureCsrfToken(_client);
 
-        // STEP 2: Perform Login using the Manager's retry wrapper
+        // STEP 2: Login Request
         final response = await _session.retryRequest(() => _client.post(
               Uri.parse('${_session.baseUrl}/login'),
               headers: {
@@ -57,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
           final loginData = jsonDecode(response.body);
 
           if (loginData['status'] == true || loginData['status'] == 'success') {
-            // STEP 3: Save the final session persistently
+            // STEP 3: Save Session
             await _session.saveSession();
 
             if (mounted) {
@@ -137,18 +138,24 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text("Welcome Back",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87)),
+                        const Text(
+                          "Welcome Back",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87),
+                        ),
                         const SizedBox(height: 8),
-                        Text("Sign in to access unit data.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 14, color: Colors.grey.shade600)),
+                        Text(
+                          "Sign in to access unit data.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 14, color: Colors.grey.shade600),
+                        ),
                         const SizedBox(height: 32),
+
+                        // Username Field
                         TextFormField(
                           controller: _usernameController,
                           decoration: InputDecoration(
@@ -157,11 +164,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12)),
                           ),
-                          validator: (value) => (value == null || value.isEmpty)
+                          validator: (v) => (v == null || v.isEmpty)
                               ? 'Please enter User ID'
                               : null,
                         ),
                         const SizedBox(height: 20),
+
+                        // Password Field
                         TextFormField(
                           controller: _passwordController,
                           obscureText: _obscurePassword,
@@ -178,11 +187,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12)),
                           ),
-                          validator: (value) => (value == null || value.isEmpty)
+                          validator: (v) => (v == null || v.isEmpty)
                               ? 'Please enter password'
                               : null,
                         ),
                         const SizedBox(height: 32),
+
+                        // Login Button
                         SizedBox(
                           height: 50,
                           child: ElevatedButton(
@@ -213,7 +224,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              Text("Version 1.0.1",
+              Text("Version 1.0.3",
                   style: TextStyle(color: Colors.grey.shade400)),
             ],
           ),

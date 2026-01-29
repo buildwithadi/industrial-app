@@ -3,25 +3,20 @@ import 'package:workmanager/workmanager.dart';
 import 'screens/splash_screen.dart';
 import 'screens/dashboard.dart';
 import 'screens/login_screen.dart';
+import 'screens/onboarding_screen.dart'; // NEW IMPORT
 import 'services/background_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Background Service
-  Workmanager().initialize(
-      callbackDispatcher, // The top-level function in background_service.dart
-      isInDebugMode: true // Set to false for release to stop console logs
-      );
+  Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
 
-  // Register the periodic task to check alerts
   Workmanager().registerPeriodicTask(
     "1",
     "fetchBackgroundTask",
-    frequency:
-        const Duration(minutes: 15), // Android minimum frequency is 15 mins
+    frequency: const Duration(minutes: 15),
     constraints: Constraints(
-      networkType: NetworkType.connected, // Only run if internet is available
+      networkType: NetworkType.connected,
     ),
   );
 
@@ -69,6 +64,7 @@ class IndustrialApp extends StatelessWidget {
       initialRoute: '/',
       routes: {
         '/': (context) => const SplashScreen(),
+        '/onboarding': (context) => const OnboardingScreen(), // NEW ROUTE
         '/login': (context) => const LoginScreen(),
         '/dashboard': (context) => const DashboardScreen(),
       },

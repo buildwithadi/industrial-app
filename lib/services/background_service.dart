@@ -1,122 +1,157 @@
 import 'dart:convert';
+import 'dart:io'; // Import for SocketException
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
-import './notification_services.dart';
+import './notification_services.dart'; // Corrected import path (was notification_services.dart)
 
-// Key for the task
 const String fetchBackgroundTask = "fetchBackgroundTask";
 
-@pragma('vm:entry-point') // Mandatory for background execution
+@pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
+    print("Background Service: Starting Task: $task");
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final NotificationService notificationService = NotificationService();
       await notificationService.init();
 
-      // 1. Retrieve Config
       String? sessionCookie = prefs.getString('session_cookie');
-      String? deviceId = prefs.getString('selected_device_id');
+      List<String>? deviceIds = prefs.getStringList('user_device_ids');
 
-      if (sessionCookie == null || deviceId == null) {
-        // Cannot check alerts if not logged in or no device selected
+      if (sessionCookie == null) {
+        print("Background Service: No session cookie. Aborting.");
+        return Future.value(true);
+      }
+      if (deviceIds == null || deviceIds.isEmpty) {
+        print("Background Service: No devices to check. Aborting.");
         return Future.value(true);
       }
 
-      // 2. Fetch Live Data
-      final response = await http.get(
-        Uri.parse('https://gridsphere.in/station/api/live-data/$deviceId'),
-        headers: {
-          'Cookie': sessionCookie,
-          'User-Agent': 'FlutterApp',
-          'Accept': 'application/json',
-        },
-      );
+      print("Background Service: Checking ${deviceIds.length} devices.");
 
-      if (response.statusCode == 200) {
-        final jsonResponse = jsonDecode(response.body);
-        List<dynamic> readings = [];
-        if (jsonResponse is List) {
-          readings = jsonResponse;
-        } else if (jsonResponse['data'] is List) {
-          readings = jsonResponse['data'];
+      for (String deviceId in deviceIds) {
+        bool hasAlerts = prefs.getBool('${deviceId}_has_alerts') ?? false;
+
+        if (!hasAlerts) {
+          print(
+              "Background Service: Device $deviceId has no alerts enabled. Skipping.");
+          continue;
         }
 
-        if (readings.isNotEmpty) {
-          final data = readings[0];
+        try {
+          print("Background Service: Fetching data for Device $deviceId...");
+          final response = await http.get(
+            Uri.parse('https://gridsphere.in/station/api/live-data/$deviceId'),
+            headers: {
+              'Cookie': sessionCookie,
+              'User-Agent': 'FlutterApp',
+              'Accept': 'application/json',
+            },
+          ).timeout(const Duration(seconds: 30)); // Add timeout
 
-          // --- NEW LOGIC START: Check for Data Freshness ---
-          String currentTimestamp = data['timestamp']?.toString() ?? "";
-          String? lastProcessedTime =
-              prefs.getString('last_processed_timestamp');
+          if (response.statusCode == 200) {
+            final jsonResponse = jsonDecode(response.body);
+            List<dynamic> readings = (jsonResponse is List)
+                ? jsonResponse
+                : (jsonResponse['data'] ?? []);
 
-          // Only proceed if we have a valid timestamp AND it's different from the last one
-          if (currentTimestamp.isNotEmpty &&
-              currentTimestamp != lastProcessedTime) {
-            // 3. Check Thresholds (Only performed on NEW data)
-            await _checkAndAlert(prefs, 'air_temp', 'Temperature', data['temp'],
-                '°C', notificationService, 1);
-            await _checkAndAlert(prefs, 'humidity', 'Humidity',
-                data['humidity'], '%', notificationService, 2);
-            await _checkAndAlert(prefs, 'rainfall', 'Rainfall',
-                data['rainfall'], 'mm', notificationService, 3);
-            await _checkAndAlert(prefs, 'light_intensity', 'Light',
-                data['light_intensity'], 'lux', notificationService, 4);
-            await _checkAndAlert(prefs, 'pressure', 'Pressure',
-                data['pressure'], 'hPa', notificationService, 5);
-            await _checkAndAlert(prefs, 'wind', 'Wind Speed',
-                data['wind_speed'], 'km/h', notificationService, 6);
+            if (readings.isNotEmpty) {
+              final data = readings[0];
+              String currentTimestamp = data['timestamp']?.toString() ?? "";
+              String? lastProcessed =
+                  prefs.getString('last_processed_$deviceId');
 
-            // 4. Update the stored timestamp so we don't alert on this specific reading again
-            await prefs.setString('last_processed_timestamp', currentTimestamp);
+              print(
+                  "Background Service: Data TS: $currentTimestamp (Last: $lastProcessed)");
 
-            print(
-                "Background Service: Processed new data at $currentTimestamp");
+              // --- CRITICAL: Logic to trigger alert ---
+              // If timestamps differ OR if we are debugging (force check)
+              if (currentTimestamp.isNotEmpty &&
+                  currentTimestamp != lastProcessed) {
+                print(
+                    "Background Service: New data found! Checking thresholds.");
+
+                await _check(prefs, deviceId, 'air_temp', 'Temp', data['temp'],
+                    '°C', notificationService);
+                await _check(prefs, deviceId, 'humidity', 'Humidity',
+                    data['humidity'], '%', notificationService);
+                await _check(prefs, deviceId, 'rainfall', 'Rain',
+                    data['rainfall'], 'mm', notificationService);
+                await _check(prefs, deviceId, 'light_intensity', 'Light',
+                    data['light_intensity'], 'lux', notificationService);
+                await _check(prefs, deviceId, 'pressure', 'Pressure',
+                    data['pressure'], 'hPa', notificationService);
+                await _check(prefs, deviceId, 'wind', 'Wind',
+                    data['wind_speed'], 'km/h', notificationService);
+                await _check(prefs, deviceId, 'pm25', 'PM2.5', data['pm25'],
+                    'µg/m³', notificationService);
+                await _check(prefs, deviceId, 'co2', 'CO2', data['co2'], 'ppm',
+                    notificationService);
+                await _check(prefs, deviceId, 'tvoc', 'TVOC', data['tvoc'],
+                    'ppb', notificationService);
+                await _check(prefs, deviceId, 'aqi', 'AQI', data['aqi'], '',
+                    notificationService);
+
+                await prefs.setString(
+                    'last_processed_$deviceId', currentTimestamp);
+              } else {
+                print("Background Service: Data is old. No alert needed.");
+              }
+            }
           } else {
-            print(
-                "Background Service: Data unchanged ($currentTimestamp). Skipping alerts.");
+            print("Background Service: API Error ${response.statusCode}");
           }
-          // --- NEW LOGIC END ---
+        } on SocketException catch (e) {
+          print("Background Service: Network Error (SocketException): $e");
+          // This confirms no internet.
+          // If on emulator: Check emulator wifi.
+          // If on device: Check background data permissions.
+        } catch (e) {
+          print("Background Service: Error checking device $deviceId: $e");
         }
       }
     } catch (e) {
-      // Fail silently in background
-      print("Background Task Error: $e");
+      print("Background Task Fatal Error: $e");
     }
 
     return Future.value(true);
   });
 }
 
-Future<void> _checkAndAlert(
+Future<void> _check(
   SharedPreferences prefs,
+  String deviceId,
   String key,
   String label,
   dynamic rawValue,
   String unit,
   NotificationService notificationService,
-  int notifId,
 ) async {
-  bool enabled = prefs.getBool('${key}_alert_enabled') ?? false;
+  bool enabled = prefs.getBool('${deviceId}_${key}_alert_enabled') ?? false;
   if (!enabled) return;
 
   double? value = double.tryParse(rawValue.toString());
   if (value == null) return;
 
-  double? min = prefs.getDouble('${key}_min');
-  double? max = prefs.getDouble('${key}_max');
+  double? min = prefs.getDouble('${deviceId}_${key}_min');
+  double? max = prefs.getDouble('${deviceId}_${key}_max');
+
+  int notifId = (deviceId + key).hashCode;
 
   if (max != null && value > max) {
+    print("Background Service: ALERT! $label ($value) > Max ($max)");
     await notificationService.showNotification(
       notifId,
-      "High $label Alert!",
+      "High $label Alert (Unit $deviceId)",
       "$label is $value $unit, exceeding limit of $max $unit.",
     );
   } else if (min != null && value < min) {
+    print("Background Service: ALERT! $label ($value) < Min ($min)");
     await notificationService.showNotification(
       notifId,
-      "Low $label Alert!",
+      "Low $label Alert (Unit $deviceId)",
       "$label is $value $unit, below limit of $min $unit.",
     );
   }

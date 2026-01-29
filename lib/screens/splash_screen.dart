@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '/services/session_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -28,25 +28,28 @@ class _SplashScreenState extends State<SplashScreen>
       curve: Curves.easeOutBack,
     );
 
-    // Initialize session check
-    _initApp();
+    _checkSession();
   }
 
-  Future<void> _initApp() async {
-    // Wait for the branding animation (3 seconds)
+  Future<void> _checkSession() async {
     await Future.delayed(const Duration(seconds: 3));
 
-    // Load existing session from storage
-    final session = SessionManager();
-    await session.loadSession();
+    final prefs = await SharedPreferences.getInstance();
+    final String? sessionCookie = prefs.getString('session_cookie');
+    final bool onboardingComplete =
+        prefs.getBool('onboarding_complete') ?? false;
 
     if (!mounted) return;
 
-    // If we have cookies saved, skip login and go to Dashboard
-    if (session.cookieHeader.isNotEmpty) {
+    if (sessionCookie != null && sessionCookie.isNotEmpty) {
+      // User is logged in -> Dashboard
       Navigator.pushReplacementNamed(context, '/dashboard');
-    } else {
+    } else if (onboardingComplete) {
+      // User finished onboarding but not logged in -> Login
       Navigator.pushReplacementNamed(context, '/login');
+    } else {
+      // New User -> Onboarding
+      Navigator.pushReplacementNamed(context, '/onboarding');
     }
   }
 
@@ -112,16 +115,13 @@ class _SplashScreenState extends State<SplashScreen>
                     style: TextStyle(
                       fontSize: 18,
                       letterSpacing: 2.0,
-                      color: Colors.black87,
+                      color: Color.fromARGB(221, 42, 42, 42),
                     ),
                   ),
                   const SizedBox(height: 10),
                   Text(
                     'Initializing Sensor Grid...',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey.shade600,
-                    ),
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
                   ),
                 ],
               ),

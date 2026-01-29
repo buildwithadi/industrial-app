@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AlertSettingsScreen extends StatefulWidget {
-  const AlertSettingsScreen({super.key});
+  final String deviceId; // Scope settings to this ID
+
+  const AlertSettingsScreen({super.key, required this.deviceId});
 
   @override
   State<AlertSettingsScreen> createState() => _AlertSettingsScreenState();
@@ -13,7 +15,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   final Map<String, TextEditingController> _maxControllers = {};
   final Map<String, bool> _enabled = {};
 
-  // List of sensors to configure
   final List<String> _sensors = [
     'Temperature',
     'Humidity',
@@ -23,10 +24,11 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'Wind Speed',
     'PM 2.5',
     'CO2',
-    'TVOC'
+    'TVOC',
+    'AQI'
   ];
 
-  // Map display name to internal key (used in prefs and API logic)
+  // Mapping display names to the keys used in JSON/SharedPreferences
   final Map<String, String> _sensorKeys = {
     'Temperature': 'air_temp',
     'Humidity': 'humidity',
@@ -34,9 +36,10 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'Light': 'light_intensity',
     'Pressure': 'pressure',
     'Wind Speed': 'wind',
-    'PM 2.5': 'pm25', // Ensure this matches API key if possible
+    'PM 2.5': 'pm25',
     'CO2': 'co2',
-    'TVOC': 'tvoc'
+    'TVOC': 'tvoc',
+    'AQI': 'aqi'
   };
 
   bool _isLoading = true;
@@ -47,47 +50,56 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     _loadSettings();
   }
 
+  // Helper to generate a unique key like "101_air_temp_max"
+  String _getKey(String sensorKey, String suffix) =>
+      '${widget.deviceId}_${sensorKey}_$suffix';
+
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     for (var sensor in _sensors) {
       String key = _sensorKeys[sensor]!;
+
+      // Load device-specific settings
       _minControllers[sensor] = TextEditingController(
-          text: prefs.getDouble('${key}_min')?.toString() ?? '');
+          text: prefs.getDouble(_getKey(key, 'min'))?.toString() ?? '');
       _maxControllers[sensor] = TextEditingController(
-          text: prefs.getDouble('${key}_max')?.toString() ?? '');
-      _enabled[sensor] = prefs.getBool('${key}_alert_enabled') ?? false;
+          text: prefs.getDouble(_getKey(key, 'max'))?.toString() ?? '');
+      _enabled[sensor] = prefs.getBool(_getKey(key, 'alert_enabled')) ?? false;
     }
     setState(() => _isLoading = false);
   }
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // Also save a flag indicating this device has active alerts configured
+    // This helps the background service decide quickly whether to process this device
+    bool anyEnabled = _enabled.values.any((e) => e == true);
+    await prefs.setBool('${widget.deviceId}_has_alerts', anyEnabled);
+
     for (var sensor in _sensors) {
       String key = _sensorKeys[sensor]!;
 
-      // Save Min
       if (_minControllers[sensor]!.text.isNotEmpty) {
         await prefs.setDouble(
-            '${key}_min', double.parse(_minControllers[sensor]!.text));
+            _getKey(key, 'min'), double.parse(_minControllers[sensor]!.text));
       } else {
-        await prefs.remove('${key}_min');
+        await prefs.remove(_getKey(key, 'min'));
       }
 
-      // Save Max
       if (_maxControllers[sensor]!.text.isNotEmpty) {
         await prefs.setDouble(
-            '${key}_max', double.parse(_maxControllers[sensor]!.text));
+            _getKey(key, 'max'), double.parse(_maxControllers[sensor]!.text));
       } else {
-        await prefs.remove('${key}_max');
+        await prefs.remove(_getKey(key, 'max'));
       }
 
-      // Save Toggle
-      await prefs.setBool('${key}_alert_enabled', _enabled[sensor]!);
+      await prefs.setBool(_getKey(key, 'alert_enabled'), _enabled[sensor]!);
     }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alert settings saved successfully')),
+        const SnackBar(content: Text('Alert settings saved for this unit')),
       );
     }
   }
@@ -108,7 +120,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Text("Alert Settings"),
+        title: Text("Alerts: Unit ${widget.deviceId}"),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 1,
@@ -130,6 +142,8 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                   margin: const EdgeInsets.only(bottom: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
+                  elevation: 0, // Flat style to match new design
+                  color: Colors.white,
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
@@ -141,7 +155,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                             Text(
                               sensor,
                               style: const TextStyle(
-                                fontSize: 18,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.black87,
                               ),
@@ -164,9 +178,14 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                               Expanded(
                                 child: TextFormField(
                                   controller: _minControllers[sensor],
-                                  keyboardType: TextInputType.number,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
                                   decoration: InputDecoration(
                                     labelText: "Min Threshold",
+                                    labelStyle: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 12),
                                     border: OutlineInputBorder(
                                         borderRadius: BorderRadius.circular(8)),
                                     contentPadding: const EdgeInsets.symmetric(
@@ -178,9 +197,14 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                               Expanded(
                                 child: TextFormField(
                                   controller: _maxControllers[sensor],
-                                  keyboardType: TextInputType.number,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
                                   decoration: InputDecoration(
                                     labelText: "Max Threshold",
+                                    labelStyle: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 12),
                                     border: OutlineInputBorder(
                                         borderRadius: BorderRadius.circular(8)),
                                     contentPadding: const EdgeInsets.symmetric(
