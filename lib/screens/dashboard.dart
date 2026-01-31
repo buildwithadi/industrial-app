@@ -5,14 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/session_manager.dart';
+import '../services/notification_services.dart';
 
-// --- OPTIMIZATION: Use the Generic Sensor Screen ---
 import 'sensor_detail_screen.dart';
-
-// Import Alert Settings
-import 'alert_settings_screen.dart';
-// Import Dashboard Settings
-import 'dashboard_settings_screen.dart';
+import 'general_settings_screen.dart'; // Import the new General Settings Screen
 
 class DashboardScreen extends StatefulWidget {
   final String? sessionCookie;
@@ -31,7 +27,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // --- STATE VARIABLES ---
   String selectedDeviceId = "";
   List<dynamic> _devices = [];
-  String? _finalSessionCookie;
 
   // Field Information State
   String farmerName = "--";
@@ -40,29 +35,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String deviceLocation = "--";
 
   bool isDeviceOffline = false;
-
   Map<String, dynamic>? sensorData;
   Map<String, List<double>> historyData = {};
 
   bool isLoading = true;
   Timer? _timer;
 
-  // Page Controller for sliding functionality
+  // Page Controller
   late PageController _pageController;
   int _currentPageIndex = 0;
 
   // --- ROLE BASED FILTERING ---
-  String _userRole = "Other"; // Default role
-  // Visibility Settings Map: Key = Display Name (e.g. "Temperature")
+  String _userRole = "Other";
+
+  // Visibility Settings Map
   Map<String, bool> _sensorVisibility = {};
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: 0);
+
+    NotificationService().requestPermissions();
+
     _initializeData();
 
-    // Periodic refresh every 60 seconds
     _timer = Timer.periodic(const Duration(seconds: 60), (timer) {
       if (selectedDeviceId.isNotEmpty) {
         _refreshData();
@@ -184,27 +181,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _initializeData() async {
     await _session.loadSession();
 
-    // Load User Role from Onboarding Preference
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      // Logic update: read 'selected_industry' set during onboarding
       _userRole = prefs.getString('selected_industry') ?? "Other";
     });
 
     await _fetchDevices();
 
     if (selectedDeviceId.isNotEmpty) {
-      await _loadVisibilitySettings(); // Load user preferences for dashboard layout
+      await _loadVisibilitySettings();
       await _refreshData();
     } else {
       _loadMockData();
     }
   }
 
-  // Load visibility prefs (e.g. "device_101_show_Temperature")
   Future<void> _loadVisibilitySettings() async {
     final prefs = await SharedPreferences.getInstance();
-    // Default list of sensors to check
     List<String> sensors = [
       'Temperature',
       'Humidity',
@@ -220,9 +213,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     Map<String, bool> settings = {};
     for (var s in sensors) {
-      // Key format matches dashboard_settings_screen.dart
       String key = '${selectedDeviceId}_show_${s.replaceAll(' ', '')}';
-      settings[s] = prefs.getBool(key) ?? true; // Default to true if not set
+      settings[s] = prefs.getBool(key) ?? true;
     }
 
     if (mounted) {
@@ -256,10 +248,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (response.statusCode == 200 && mounted) {
         final dynamic data = jsonDecode(response.body);
         List<dynamic> deviceList = [];
-        if (data is List)
+        if (data is List) {
           deviceList = data;
-        else if (data is Map)
+        } else if (data is Map) {
           deviceList = data['data'] ?? data['devices'] ?? [];
+        }
 
         if (deviceList.isNotEmpty) {
           final prefs = await SharedPreferences.getInstance();
@@ -440,7 +433,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       lastOnline = "--";
     });
 
-    await _loadVisibilitySettings(); // Reload prefs for new device
+    await _loadVisibilitySettings();
     _refreshData();
   }
 
@@ -460,7 +453,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         deviceStatus = "Online";
         lastOnline = "Today, 10:30 AM";
 
-        // --- CHANGED: Explicitly set mock data to ZEROs ---
         sensorData = {
           "air_temp": 0.0,
           "humidity": 0.0,
@@ -473,7 +465,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           "aqi": 0.0,
           "co2": 0.0,
         };
-        // Reset history to list of zeros for flat line
         historyData = {
           "air_temp": List.filled(10, 0.0),
           "humidity": List.filled(10, 0.0),
@@ -491,10 +482,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // --- UI HELPERS ---
-  // Modified to filter based on Role AND individual Visibility Settings
   List<Map<String, dynamic>> _getDataForPage(bool isWeather) {
-    // --- CHANGED: Use a fallback empty map if sensorData is null, but populate with zeros ---
-    // This ensures cards are built even if data is missing, but they show 0.
     final data = sensorData ??
         {
           "air_temp": 0.0,
@@ -510,29 +498,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
         };
 
     String v(String k, String u) => "${data[k]?.toString() ?? '0.0'} $u";
-    // Modified: Ensure list is never null, use a list of 0.0s if empty/null
     List<double> h(String k) {
       final list = historyData[k];
       if (list == null || list.isEmpty) {
-        // Return 20 zeros for a straight line
         return List.filled(20, 0.0);
       }
       return list;
     }
 
     List<Map<String, dynamic>> items = [];
-
-    // Helper to check if a specific sensor is enabled by the user in settings
     bool isVisible(String name) => _sensorVisibility[name] ?? true;
 
     if (isWeather) {
-      // Agriculture logic: Prefer weather params
       bool isAgri = _userRole == 'Agriculture' || _userRole == 'Other';
-      // If user selected "Chemical", they might still want weather, but we prioritize logic
-      // Current logic: Agriculture/Other gets full weather suite.
-
       if (isAgri || true) {
-        // Allow all roles to see weather if enabled in settings
         if (isVisible('Temperature'))
           items.add({
             'n': 'Temperature',
@@ -559,12 +538,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               .add({'n': 'Wind Speed', 'v': v('wind', 'km/h'), 'h': h('wind')});
       }
     } else {
-      // Air Quality Page
-      // Chemical & Cement prioritize these
       bool isIndustrial = _userRole == 'Chemical' ||
           _userRole == 'Cement' ||
           _userRole == 'Other';
-
       if (isIndustrial || true) {
         if (isVisible('AQI'))
           items.add({'n': 'AQI', 'v': v('aqi', ''), 'h': h('aqi')});
@@ -673,8 +649,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Padding(
                         padding: EdgeInsets.all(32.0),
                         child: CircularProgressIndicator()))
-                : _buildSensorGrid(
-                    data), // --- CHANGED: Always build grid, even if data is empty (handled by helpers now)
+                : _buildSensorGrid(data),
             const SizedBox(height: 20),
           ],
         ),
@@ -682,12 +657,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildGrid(List<Map<String, dynamic>> items) {
-    return _buildSensorGrid(items);
-  }
-
   Widget _buildSensorGrid(List<Map<String, dynamic>> items) {
-    // --- CHANGED: If items is empty (e.g. all filtered out), show message
     if (items.isEmpty) {
       return Center(
         child: Padding(
@@ -720,7 +690,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Color activeColor = config.color;
     bool isAlert = false;
 
-    // Safety: check status if it exists
     if (item['status'] == 'warning') {
       activeColor = Colors.orange;
       isAlert = true;
@@ -807,18 +776,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
-  }
-
-  Widget _buildNoDataState() {
-    return Center(
-        child: Padding(
-            padding: const EdgeInsets.all(32.0),
-            child: Column(children: [
-              Icon(Icons.cloud_off, size: 60, color: Colors.grey.shade300),
-              const SizedBox(height: 16),
-              Text("No Data Available",
-                  style: TextStyle(color: Colors.grey.shade500))
-            ])));
   }
 
   Widget _buildCategoryToggle() {
@@ -968,82 +925,76 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildDrawer() {
     return Drawer(
-        child: Container(
-            color: Colors.white,
-            child: ListView(padding: EdgeInsets.zero, children: [
-              UserAccountsDrawerHeader(
-                  decoration: BoxDecoration(color: Colors.grey.shade100),
-                  accountName: Text(farmerName,
-                      style: const TextStyle(
-                          color: Colors.black87, fontWeight: FontWeight.bold)),
-                  accountEmail: Text(_userRole, // Show current role
-                      style: const TextStyle(color: Colors.black54)),
-                  currentAccountPicture: CircleAvatar(
-                      backgroundColor: Theme.of(context).primaryColor,
-                      child: Text(
-                          farmerName.isNotEmpty && farmerName != "--"
-                              ? farmerName[0].toUpperCase()
-                              : "U",
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 24)))),
-              ListTile(
-                  leading: const Icon(Icons.dashboard, color: Colors.grey),
-                  title: const Text('Dashboard',
-                      style: TextStyle(color: Colors.black87)),
-                  onTap: () => Navigator.pop(context)),
-              // NEW: Layout Settings
-              ListTile(
-                  leading:
-                      const Icon(Icons.grid_view_rounded, color: Colors.grey),
-                  title: const Text('Dashboard Layout',
-                      style: TextStyle(color: Colors.black87)),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    if (selectedDeviceId.isNotEmpty) {
-                      await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => DashboardSettingsScreen(
-                                  deviceId: selectedDeviceId)));
-                      // Refresh dashboard on return to apply changes
-                      _loadVisibilitySettings();
-                      setState(() {});
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text("Please select a unit first.")));
-                    }
-                  }),
-              ListTile(
-                  leading: const Icon(Icons.notifications_active,
-                      color: Colors.grey),
-                  title: const Text('Alert Settings',
-                      style: TextStyle(color: Colors.black87)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    if (selectedDeviceId.isNotEmpty) {
-                      Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => AlertSettingsScreen(
-                                  deviceId: selectedDeviceId)));
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                          content: Text(
-                              "Please wait for device to load or select a unit first.")));
-                    }
-                  }),
-              ListTile(
-                  leading: const Icon(Icons.settings, color: Colors.grey),
-                  title: const Text('Settings',
-                      style: TextStyle(color: Colors.black87)),
-                  onTap: () {}),
-              const Divider(),
-              ListTile(
-                  leading: const Icon(Icons.logout, color: Colors.redAccent),
-                  title: const Text('Logout',
-                      style: TextStyle(color: Colors.redAccent)),
-                  onTap: _logout)
-            ])));
+      child: Container(
+        color: Colors.white,
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            UserAccountsDrawerHeader(
+              decoration: BoxDecoration(color: Colors.grey.shade100),
+              accountName: Text(
+                farmerName,
+                style: const TextStyle(
+                    color: Colors.black87, fontWeight: FontWeight.bold),
+              ),
+              accountEmail: Text(
+                _userRole,
+                style: const TextStyle(color: Colors.black54),
+              ),
+              currentAccountPicture: CircleAvatar(
+                backgroundColor: Theme.of(context).primaryColor,
+                child: Text(
+                  farmerName.isNotEmpty && farmerName != "--"
+                      ? farmerName[0].toUpperCase()
+                      : "U",
+                  style: const TextStyle(color: Colors.white, fontSize: 24),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.dashboard, color: Colors.grey),
+              title: const Text('Dashboard',
+                  style: TextStyle(color: Colors.black87)),
+              onTap: () => Navigator.pop(context),
+            ),
+
+            // --- UPDATED: Generic Settings Tile pointing to GeneralSettingsScreen ---
+            ListTile(
+              leading: const Icon(Icons.settings, color: Colors.grey),
+              title: const Text('Settings',
+                  style: TextStyle(color: Colors.black87)),
+              onTap: () async {
+                Navigator.pop(context);
+                if (selectedDeviceId.isNotEmpty) {
+                  // Navigate to the General Settings Screen
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          GeneralSettingsScreen(deviceId: selectedDeviceId),
+                    ),
+                  );
+                  // Refresh settings when returning
+                  _loadVisibilitySettings();
+                  setState(() {});
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text("Please select a unit first.")));
+                }
+              },
+            ),
+
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.redAccent),
+              title: const Text('Logout',
+                  style: TextStyle(color: Colors.redAccent)),
+              onTap: _logout,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -1064,12 +1015,9 @@ class SparklinePainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
     final path = Path();
 
-    // --- UPDATED LOGIC FOR FLAT LINE ---
-    // If all values are the same (e.g. all 0.0), or only 1 value, or if range is tiny
     bool isFlat = data.every((e) => e == data[0]);
 
     if (isFlat) {
-      // Draw straight line in middle
       path.moveTo(0, size.height / 2);
       path.lineTo(size.width, size.height / 2);
     } else {
@@ -1077,7 +1025,6 @@ class SparklinePainter extends CustomPainter {
       double maxVal = data.reduce(max);
       double range = maxVal - minVal;
 
-      // Safety padding for range
       if (range == 0) {
         range = 1.0;
         minVal -= 0.5;

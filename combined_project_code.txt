@@ -1,0 +1,3262 @@
+
+================================================================================
+FILE: main.dart
+================================================================================
+
+import 'package:flutter/material.dart';
+import 'package:workmanager/workmanager.dart';
+import 'screens/splash_screen.dart';
+import 'screens/dashboard.dart';
+import 'screens/login_screen.dart';
+import 'screens/onboarding_screen.dart'; // NEW IMPORT
+import 'services/background_service.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
+
+  Workmanager().registerPeriodicTask(
+    "1",
+    "fetchBackgroundTask",
+    frequency: const Duration(minutes: 15),
+    constraints: Constraints(
+      networkType: NetworkType.connected,
+    ),
+  );
+
+  runApp(const IndustrialApp());
+}
+
+class IndustrialApp extends StatelessWidget {
+  const IndustrialApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Industrial Monitor',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF5F7FA),
+        primaryColor: const Color(0xFF00B0FF),
+        cardColor: Colors.white,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          elevation: 2,
+          centerTitle: true,
+          iconTheme: IconThemeData(color: Colors.black87),
+          titleTextStyle: TextStyle(
+            color: Colors.black87,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.0,
+          ),
+        ),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00B0FF),
+          brightness: Brightness.light,
+        ).copyWith(
+          secondary: const Color(0xFFFFAB00),
+          surface: Colors.white,
+          error: const Color(0xFFFF5252),
+        ),
+        dividerTheme: const DividerThemeData(
+          color: Color(0xFFE0E0E0),
+        ),
+      ),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const SplashScreen(),
+        '/onboarding': (context) => const OnboardingScreen(), // NEW ROUTE
+        '/login': (context) => const LoginScreen(),
+        '/dashboard': (context) => const DashboardScreen(),
+      },
+    );
+  }
+}
+
+
+================================================================================
+FILE: screens\alert_settings_screen.dart
+================================================================================
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class AlertSettingsScreen extends StatefulWidget {
+  final String deviceId; // Scope settings to this ID
+
+  const AlertSettingsScreen({super.key, required this.deviceId});
+
+  @override
+  State<AlertSettingsScreen> createState() => _AlertSettingsScreenState();
+}
+
+class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
+  final Map<String, TextEditingController> _minControllers = {};
+  final Map<String, TextEditingController> _maxControllers = {};
+  final Map<String, bool> _enabled = {};
+
+  final List<String> _sensors = [
+    'Temperature',
+    'Humidity',
+    'Rainfall',
+    'Light',
+    'Pressure',
+    'Wind Speed',
+    'PM 2.5',
+    'CO2',
+    'TVOC',
+    'AQI'
+  ];
+
+  // Mapping display names to the keys used in JSON/SharedPreferences
+  final Map<String, String> _sensorKeys = {
+    'Temperature': 'air_temp',
+    'Humidity': 'humidity',
+    'Rainfall': 'rainfall',
+    'Light': 'light_intensity',
+    'Pressure': 'pressure',
+    'Wind Speed': 'wind',
+    'PM 2.5': 'pm25',
+    'CO2': 'co2',
+    'TVOC': 'tvoc',
+    'AQI': 'aqi'
+  };
+
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  String _getKey(String sensorKey, String suffix) =>
+      '${widget.deviceId}_${sensorKey}_$suffix';
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (var sensor in _sensors) {
+      String key = _sensorKeys[sensor]!;
+
+      _minControllers[sensor] = TextEditingController(
+          text: prefs.getDouble(_getKey(key, 'min'))?.toString() ?? '');
+      _maxControllers[sensor] = TextEditingController(
+          text: prefs.getDouble(_getKey(key, 'max'))?.toString() ?? '');
+      _enabled[sensor] = prefs.getBool(_getKey(key, 'alert_enabled')) ?? false;
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    bool anyEnabled = _enabled.values.any((e) => e == true);
+    await prefs.setBool('${widget.deviceId}_has_alerts', anyEnabled);
+
+    for (var sensor in _sensors) {
+      String key = _sensorKeys[sensor]!;
+
+      if (_minControllers[sensor]!.text.isNotEmpty) {
+        await prefs.setDouble(
+            _getKey(key, 'min'), double.parse(_minControllers[sensor]!.text));
+      } else {
+        await prefs.remove(_getKey(key, 'min'));
+      }
+
+      if (_maxControllers[sensor]!.text.isNotEmpty) {
+        await prefs.setDouble(
+            _getKey(key, 'max'), double.parse(_maxControllers[sensor]!.text));
+      } else {
+        await prefs.remove(_getKey(key, 'max'));
+      }
+
+      await prefs.setBool(_getKey(key, 'alert_enabled'), _enabled[sensor]!);
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Alert settings saved successfully'),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    for (var c in _minControllers.values) c.dispose();
+    for (var c in _maxControllers.values) c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        title: Text(
+          "Alerts: Unit ${widget.deviceId}",
+          style: const TextStyle(
+            color: Colors.black87,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon:
+              const Icon(Icons.arrow_back_ios, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.check_circle_outline,
+                color: Colors.blue, size: 28),
+            onPressed: _saveSettings,
+            tooltip: "Save Settings",
+          )
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              padding: const EdgeInsets.all(20),
+              itemCount: _sensors.length,
+              itemBuilder: (context, index) {
+                String sensor = _sensors[index];
+                bool isEnabled = _enabled[sensor] ?? false;
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.03),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              sensor,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: isEnabled ? Colors.black87 : Colors.grey,
+                              ),
+                            ),
+                            Switch.adaptive(
+                              value: isEnabled,
+                              onChanged: (val) {
+                                setState(() {
+                                  _enabled[sensor] = val;
+                                });
+                              },
+                              activeColor: Theme.of(context).primaryColor,
+                            ),
+                          ],
+                        ),
+                        if (isEnabled) ...[
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildThresholdInput(
+                                  _minControllers[sensor]!,
+                                  "Min Threshold",
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: _buildThresholdInput(
+                                  _maxControllers[sensor]!,
+                                  "Max Threshold",
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
+  Widget _buildThresholdInput(TextEditingController controller, String label) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+        filled: true,
+        fillColor: const Color(0xFFFAFAFA),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.blue, width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: screens\dashboard.dart
+================================================================================
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/session_manager.dart';
+
+// --- OPTIMIZATION: Use the Generic Sensor Screen ---
+import 'sensor_detail_screen.dart';
+
+// Import Alert Settings
+import 'alert_settings_screen.dart';
+// Import Dashboard Settings
+import 'dashboard_settings_screen.dart';
+
+class DashboardScreen extends StatefulWidget {
+  final String? sessionCookie;
+
+  const DashboardScreen({super.key, this.sessionCookie});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  // --- SESSION & NETWORK ---
+  final SessionManager _session = SessionManager();
+  final http.Client _client = http.Client();
+
+  // --- STATE VARIABLES ---
+  String selectedDeviceId = "";
+  List<dynamic> _devices = [];
+  String? _finalSessionCookie;
+
+  // Field Information State
+  String farmerName = "--";
+  String lastOnline = "--";
+  String deviceStatus = "Offline";
+  String deviceLocation = "--";
+
+  bool isDeviceOffline = false;
+
+  Map<String, dynamic>? sensorData;
+  Map<String, List<double>> historyData = {};
+
+  bool isLoading = true;
+  Timer? _timer;
+
+  // Page Controller for sliding functionality
+  late PageController _pageController;
+  int _currentPageIndex = 0;
+
+  // --- ROLE BASED FILTERING ---
+  String _userRole = "Other"; // Default role
+  // Visibility Settings Map: Key = Display Name (e.g. "Temperature")
+  Map<String, bool> _sensorVisibility = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(initialPage: 0);
+    _initializeData();
+
+    // Periodic refresh every 60 seconds
+    _timer = Timer.periodic(const Duration(seconds: 60), (timer) {
+      if (selectedDeviceId.isNotEmpty) {
+        _refreshData();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _client.close();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  // --- CONFIGURATION FACTORY ---
+  SensorConfig _getSensorConfig(String name) {
+    if (name.contains("Temperature")) {
+      return SensorConfig(
+        title: "Temperature",
+        jsonKey: "temp",
+        unit: "°C",
+        color: Colors.orange,
+        icon: Icons.thermostat,
+      );
+    }
+    if (name.contains("Humidity")) {
+      return SensorConfig(
+        title: "Humidity",
+        jsonKey: "humidity",
+        unit: "%",
+        color: Colors.blue,
+        icon: Icons.water_drop,
+      );
+    }
+    if (name.contains("Rainfall")) {
+      return SensorConfig(
+        title: "Rainfall",
+        jsonKey: "rainfall",
+        unit: "mm",
+        color: Colors.indigo,
+        icon: Icons.cloudy_snowing,
+      );
+    }
+    if (name.contains("Light")) {
+      return SensorConfig(
+        title: "Light Intensity",
+        jsonKey: "light_intensity",
+        unit: "lux",
+        color: Colors.amber,
+        icon: Icons.wb_sunny,
+      );
+    }
+    if (name.contains("Pressure")) {
+      return SensorConfig(
+        title: "Pressure",
+        jsonKey: "pressure",
+        unit: "hPa",
+        color: Colors.deepPurple,
+        icon: Icons.speed,
+      );
+    }
+    if (name.contains("Wind")) {
+      return SensorConfig(
+        title: "Wind Speed",
+        jsonKey: "wind_speed",
+        unit: "km/h",
+        color: Colors.teal,
+        icon: Icons.air,
+      );
+    }
+    if (name.contains("PM 2.5")) {
+      return SensorConfig(
+        title: "PM 2.5",
+        jsonKey: "pm25",
+        unit: "µg/m³",
+        color: Colors.blueGrey,
+        icon: Icons.grain,
+      );
+    }
+    if (name.contains("CO2")) {
+      return SensorConfig(
+        title: "CO2",
+        jsonKey: "co2",
+        unit: "ppm",
+        color: Colors.green,
+        icon: Icons.cloud,
+      );
+    }
+    if (name.contains("TVOC")) {
+      return SensorConfig(
+        title: "TVOC",
+        jsonKey: "tvoc",
+        unit: "ppb",
+        color: Colors.brown,
+        icon: Icons.science,
+      );
+    }
+    if (name.contains("AQI")) {
+      return SensorConfig(
+        title: "AQI",
+        jsonKey: "aqi",
+        unit: "",
+        color: Colors.cyan,
+        icon: Icons.filter_drama,
+      );
+    }
+
+    return SensorConfig(
+      title: name,
+      jsonKey: name.toLowerCase(),
+      unit: "",
+      color: Colors.grey,
+      icon: Icons.device_unknown,
+    );
+  }
+
+  // --- INITIALIZATION ---
+  Future<void> _initializeData() async {
+    await _session.loadSession();
+
+    // Load User Role from Onboarding Preference
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      // Logic update: read 'selected_industry' set during onboarding
+      _userRole = prefs.getString('selected_industry') ?? "Other";
+    });
+
+    await _fetchDevices();
+
+    if (selectedDeviceId.isNotEmpty) {
+      await _loadVisibilitySettings(); // Load user preferences for dashboard layout
+      await _refreshData();
+    } else {
+      _loadMockData();
+    }
+  }
+
+  // Load visibility prefs (e.g. "device_101_show_Temperature")
+  Future<void> _loadVisibilitySettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Default list of sensors to check
+    List<String> sensors = [
+      'Temperature',
+      'Humidity',
+      'Rainfall',
+      'Light Intensity',
+      'Pressure',
+      'Wind Speed',
+      'PM 2.5',
+      'CO2',
+      'TVOC',
+      'AQI'
+    ];
+
+    Map<String, bool> settings = {};
+    for (var s in sensors) {
+      // Key format matches dashboard_settings_screen.dart
+      String key = '${selectedDeviceId}_show_${s.replaceAll(' ', '')}';
+      settings[s] = prefs.getBool(key) ?? true; // Default to true if not set
+    }
+
+    if (mounted) {
+      setState(() {
+        _sensorVisibility = settings;
+      });
+    }
+  }
+
+  Future<void> _refreshData() async {
+    if (!mounted) return;
+    await Future.wait([
+      _fetchLiveData(),
+      _fetchHistoryData(),
+    ]);
+    if (mounted) setState(() => isLoading = false);
+  }
+
+  // --- API CALLS ---
+  Future<void> _fetchDevices() async {
+    try {
+      final response = await _session.retryRequest(() => _client.get(
+            Uri.parse('${_session.baseUrl}/getDevices'),
+            headers: {
+              'Cookie': _session.cookieHeader,
+              'User-Agent': _session.userAgent,
+              'Accept': 'application/json',
+            },
+          ));
+
+      if (response.statusCode == 200 && mounted) {
+        final dynamic data = jsonDecode(response.body);
+        List<dynamic> deviceList = [];
+        if (data is List)
+          deviceList = data;
+        else if (data is Map)
+          deviceList = data['data'] ?? data['devices'] ?? [];
+
+        if (deviceList.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          String? savedId = prefs.getString('selected_device_id');
+          var deviceToSelect = deviceList[0];
+
+          if (savedId != null) {
+            try {
+              deviceToSelect =
+                  deviceList.firstWhere((d) => d['d_id'].toString() == savedId);
+            } catch (_) {}
+          }
+
+          setState(() {
+            _devices = deviceList;
+            selectedDeviceId = deviceToSelect['d_id'].toString();
+            deviceLocation = deviceToSelect['address']?.toString() ?? "Field A";
+            farmerName = deviceToSelect["farm_name"]?.toString() ?? "Farmer";
+          });
+
+          await prefs.setString('selected_device_id', selectedDeviceId);
+        }
+      }
+    } catch (e) {
+      debugPrint("Exception fetching devices: $e");
+    }
+  }
+
+  Future<void> _fetchLiveData() async {
+    if (selectedDeviceId.isEmpty || selectedDeviceId.contains("Demo")) return;
+
+    try {
+      final response = await _session.retryRequest(() => _client.get(
+            Uri.parse('${_session.baseUrl}/live-data/$selectedDeviceId'),
+            headers: {
+              'Cookie': _session.cookieHeader,
+              'User-Agent': _session.userAgent,
+              'Accept': 'application/json',
+            },
+          ));
+
+      if (response.statusCode == 200 && mounted) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> readings = (jsonResponse is List)
+            ? jsonResponse
+            : (jsonResponse['data'] ?? []);
+
+        if (readings.isNotEmpty) {
+          final reading = readings[0];
+
+          setState(() {
+            String timeStr = reading['timestamp']?.toString() ?? "";
+            lastOnline = timeStr;
+
+            bool isOffline = false;
+            if (timeStr.isNotEmpty) {
+              try {
+                DateTime readingTime =
+                    DateTime.parse(timeStr.replaceAll(' ', 'T'));
+                Duration diff = DateTime.now().difference(readingTime);
+                if (diff.inMinutes > 90) isOffline = true;
+              } catch (_) {}
+            }
+
+            isDeviceOffline = isOffline;
+            deviceStatus = isOffline ? "Offline" : "Online";
+
+            sensorData = {
+              "air_temp": double.tryParse(reading['temp'].toString()) ?? 0.0,
+              "humidity":
+                  double.tryParse(reading['humidity'].toString()) ?? 0.0,
+              "rainfall":
+                  double.tryParse(reading['rainfall'].toString()) ?? 0.0,
+              "light_intensity":
+                  double.tryParse(reading['light_intensity'].toString()) ?? 0.0,
+              "wind": double.tryParse(reading['wind_speed'].toString()) ?? 0.0,
+              "pressure":
+                  double.tryParse(reading['pressure'].toString()) ?? 0.0,
+              "pm25": double.tryParse(reading['pm25'].toString()) ?? 0.0,
+              "tvoc": double.tryParse(reading['tvoc'].toString()) ?? 0.0,
+              "aqi": double.tryParse(reading['aqi'].toString()) ?? 0.0,
+              "co2": double.tryParse(reading['co2'].toString()) ?? 0.0,
+            };
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Exception fetching live data: $e");
+    }
+  }
+
+  Future<void> _fetchHistoryData() async {
+    if (selectedDeviceId.isEmpty || selectedDeviceId.contains("Demo")) return;
+
+    try {
+      final response = await _session.retryRequest(() => _client.get(
+            Uri.parse(
+                '${_session.baseUrl}/devices/$selectedDeviceId/history?range=daily'),
+            headers: {
+              'Cookie': _session.cookieHeader,
+              'User-Agent': _session.userAgent,
+              'Accept': 'application/json',
+            },
+          ));
+
+      if (response.statusCode == 200 && mounted) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> readings = (jsonResponse is List)
+            ? jsonResponse
+            : (jsonResponse['data'] ?? []);
+
+        if (readings.isNotEmpty) {
+          Map<String, List<double>> newHistory = {};
+          for (var key in [
+            'temp',
+            'humidity',
+            'rainfall',
+            'light_intensity',
+            'wind_speed',
+            'pressure',
+            'pm25',
+            'tvoc',
+            'aqi',
+            'co2'
+          ]) {
+            newHistory[key] = readings
+                .map<double>((r) => double.tryParse(r[key].toString()) ?? 0.0)
+                .toList()
+                .reversed
+                .toList();
+          }
+
+          setState(() {
+            historyData = {
+              "air_temp": newHistory['temp']!,
+              "humidity": newHistory['humidity']!,
+              "rainfall": newHistory['rainfall']!,
+              "light_intensity": newHistory['light_intensity']!,
+              "wind": newHistory['wind_speed']!,
+              "pressure": newHistory['pressure']!,
+              "pm25": newHistory['pm25']!,
+              "tvoc": newHistory['tvoc']!,
+              "aqi": newHistory['aqi']!,
+              "co2": newHistory['co2']!,
+            };
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Exception fetching history data: $e");
+    }
+  }
+
+  // --- ACTIONS ---
+  Future<void> _logout() async {
+    setState(() => isLoading = true);
+    await _session.clearSession();
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    }
+  }
+
+  void _switchDevice(String deviceId, String location, String name) async {
+    if (selectedDeviceId == deviceId) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selected_device_id', deviceId);
+
+    setState(() {
+      selectedDeviceId = deviceId;
+      deviceLocation = location;
+      farmerName = name;
+      isLoading = true;
+      sensorData = null;
+      isDeviceOffline = false;
+      deviceStatus = "Checking...";
+      lastOnline = "--";
+    });
+
+    await _loadVisibilitySettings(); // Reload prefs for new device
+    _refreshData();
+  }
+
+  void _onCategoryTapped(int index) {
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  void _loadMockData() {
+    if (mounted) {
+      setState(() {
+        isLoading = false;
+        farmerName = "Aditya Farm";
+        deviceStatus = "Online";
+        lastOnline = "Today, 10:30 AM";
+
+        // --- CHANGED: Explicitly set mock data to ZEROs ---
+        sensorData = {
+          "air_temp": 0.0,
+          "humidity": 0.0,
+          "rainfall": 0.0,
+          "light_intensity": 0.0,
+          "wind": 0.0,
+          "pressure": 0.0,
+          "pm25": 0.0,
+          "tvoc": 0.0,
+          "aqi": 0.0,
+          "co2": 0.0,
+        };
+        // Reset history to list of zeros for flat line
+        historyData = {
+          "air_temp": List.filled(10, 0.0),
+          "humidity": List.filled(10, 0.0),
+          "rainfall": List.filled(10, 0.0),
+          "light_intensity": List.filled(10, 0.0),
+          "wind": List.filled(10, 0.0),
+          "pressure": List.filled(10, 0.0),
+          "pm25": List.filled(10, 0.0),
+          "tvoc": List.filled(10, 0.0),
+          "aqi": List.filled(10, 0.0),
+          "co2": List.filled(10, 0.0),
+        };
+      });
+    }
+  }
+
+  // --- UI HELPERS ---
+  // Modified to filter based on Role AND individual Visibility Settings
+  List<Map<String, dynamic>> _getDataForPage(bool isWeather) {
+    // --- CHANGED: Use a fallback empty map if sensorData is null, but populate with zeros ---
+    // This ensures cards are built even if data is missing, but they show 0.
+    final data = sensorData ??
+        {
+          "air_temp": 0.0,
+          "humidity": 0.0,
+          "rainfall": 0.0,
+          "light_intensity": 0.0,
+          "wind": 0.0,
+          "pressure": 0.0,
+          "pm25": 0.0,
+          "tvoc": 0.0,
+          "aqi": 0.0,
+          "co2": 0.0
+        };
+
+    String v(String k, String u) => "${data[k]?.toString() ?? '0.0'} $u";
+    // Modified: Ensure list is never null, use a list of 0.0s if empty/null
+    List<double> h(String k) {
+      final list = historyData[k];
+      if (list == null || list.isEmpty) {
+        // Return 20 zeros for a straight line
+        return List.filled(20, 0.0);
+      }
+      return list;
+    }
+
+    List<Map<String, dynamic>> items = [];
+
+    // Helper to check if a specific sensor is enabled by the user in settings
+    bool isVisible(String name) => _sensorVisibility[name] ?? true;
+
+    if (isWeather) {
+      // Agriculture logic: Prefer weather params
+      bool isAgri = _userRole == 'Agriculture' || _userRole == 'Other';
+      // If user selected "Chemical", they might still want weather, but we prioritize logic
+      // Current logic: Agriculture/Other gets full weather suite.
+
+      if (isAgri || true) {
+        // Allow all roles to see weather if enabled in settings
+        if (isVisible('Temperature'))
+          items.add({
+            'n': 'Temperature',
+            'v': v('air_temp', '°C'),
+            'h': h('air_temp')
+          });
+        if (isVisible('Humidity'))
+          items.add(
+              {'n': 'Humidity', 'v': v('humidity', '%'), 'h': h('humidity')});
+        if (isVisible('Rainfall'))
+          items.add(
+              {'n': 'Rainfall', 'v': v('rainfall', 'mm'), 'h': h('rainfall')});
+        if (isVisible('Light Intensity'))
+          items.add({
+            'n': 'Light Intensity',
+            'v': v('light_intensity', 'lux'),
+            'h': h('light_intensity')
+          });
+        if (isVisible('Pressure'))
+          items.add(
+              {'n': 'Pressure', 'v': v('pressure', 'hPa'), 'h': h('pressure')});
+        if (isVisible('Wind Speed'))
+          items
+              .add({'n': 'Wind Speed', 'v': v('wind', 'km/h'), 'h': h('wind')});
+      }
+    } else {
+      // Air Quality Page
+      // Chemical & Cement prioritize these
+      bool isIndustrial = _userRole == 'Chemical' ||
+          _userRole == 'Cement' ||
+          _userRole == 'Other';
+
+      if (isIndustrial || true) {
+        if (isVisible('AQI'))
+          items.add({'n': 'AQI', 'v': v('aqi', ''), 'h': h('aqi')});
+        if (isVisible('PM 2.5'))
+          items.add({'n': 'PM 2.5', 'v': v('pm25', 'µg/m³'), 'h': h('pm25')});
+        if (isVisible('CO2'))
+          items.add({'n': 'CO2', 'v': v('co2', 'ppm'), 'h': h('co2')});
+        if (isVisible('TVOC'))
+          items.add({'n': 'TVOC', 'v': v('tvoc', 'ppb'), 'h': h('tvoc')});
+      }
+    }
+
+    return items;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: _devices.isEmpty
+            ? const Text('UNIT DASHBOARD')
+            : DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: selectedDeviceId.isNotEmpty ? selectedDeviceId : null,
+                  dropdownColor: Colors.white,
+                  icon:
+                      const Icon(Icons.arrow_drop_down, color: Colors.black87),
+                  hint: const Text("Select Unit"),
+                  items: _devices.map<DropdownMenuItem<String>>((device) {
+                    return DropdownMenuItem<String>(
+                      value: device['d_id'].toString(),
+                      child: Text(
+                        device['farm_name'] ?? "Unknown",
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      final device = _devices
+                          .firstWhere((d) => d['d_id'].toString() == newValue);
+                      _switchDevice(
+                          newValue,
+                          device['address']?.toString() ?? "Unknown",
+                          device['farm_name']?.toString() ?? "Unknown");
+                    }
+                  },
+                ),
+              ),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refreshData),
+          IconButton(
+              icon: const Icon(Icons.notifications_none), onPressed: () {}),
+        ],
+      ),
+      body: AbsorbPointer(
+        absorbing: isLoading,
+        child: Column(
+          children: [
+            Padding(
+                padding: const EdgeInsets.all(16), child: _buildHeaderStatus()),
+            Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _buildCategoryToggle()),
+            const SizedBox(height: 16),
+            Expanded(
+              child: PageView(
+                controller: _pageController,
+                onPageChanged: (i) => setState(() => _currentPageIndex = i),
+                children: [
+                  _buildPageContent("Weather Readings", _getDataForPage(true)),
+                  _buildPageContent(
+                      "Air Quality Readings", _getDataForPage(false)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      drawer: _buildDrawer(),
+    );
+  }
+
+  Widget _buildPageContent(String title, List<Map<String, dynamic>> data) {
+    return RefreshIndicator(
+      onRefresh: _refreshData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title.toUpperCase(),
+                style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black54,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 12),
+            (isLoading && sensorData == null)
+                ? const Center(
+                    child: Padding(
+                        padding: EdgeInsets.all(32.0),
+                        child: CircularProgressIndicator()))
+                : _buildSensorGrid(
+                    data), // --- CHANGED: Always build grid, even if data is empty (handled by helpers now)
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGrid(List<Map<String, dynamic>> items) {
+    return _buildSensorGrid(items);
+  }
+
+  Widget _buildSensorGrid(List<Map<String, dynamic>> items) {
+    // --- CHANGED: If items is empty (e.g. all filtered out), show message
+    if (items.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Text("No visible sensors for this role.",
+              style: TextStyle(color: Colors.grey.shade500)),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+          childAspectRatio: 0.85),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final item = items[index];
+        final config = _getSensorConfig(item['n']);
+        return _buildSensorCard(item, config);
+      },
+    );
+  }
+
+  Widget _buildSensorCard(Map<String, dynamic> item, SensorConfig config) {
+    Color activeColor = config.color;
+    bool isAlert = false;
+
+    // Safety: check status if it exists
+    if (item['status'] == 'warning') {
+      activeColor = Colors.orange;
+      isAlert = true;
+    } else if (item['status'] == 'alert') {
+      activeColor = Colors.red;
+      isAlert = true;
+    }
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      elevation: 3,
+      shadowColor: Colors.black.withOpacity(0.05),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          if (selectedDeviceId.isNotEmpty) {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (context) => SensorDetailScreen(
+                          deviceId: selectedDeviceId,
+                          sessionCookie: _session.cookieHeader,
+                          config: config,
+                        )));
+          }
+        },
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: isAlert
+                ? Border.all(color: activeColor.withOpacity(0.5), width: 1.5)
+                : null,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                              color: activeColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(10)),
+                          child:
+                              Icon(config.icon, color: activeColor, size: 24)),
+                      Icon(Icons.chevron_right,
+                          size: 20, color: Colors.grey[300]),
+                    ]),
+                const Spacer(),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(item['v'],
+                      style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87)),
+                ),
+                const SizedBox(height: 4),
+                Text(item['n'],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+                const SizedBox(height: 12),
+                SizedBox(
+                    height: 40,
+                    width: double.infinity,
+                    child: CustomPaint(
+                        painter: SparklinePainter(
+                            data: item['h'],
+                            color: activeColor,
+                            lineWidth: 2.0)))
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoDataState() {
+    return Center(
+        child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(children: [
+              Icon(Icons.cloud_off, size: 60, color: Colors.grey.shade300),
+              const SizedBox(height: 16),
+              Text("No Data Available",
+                  style: TextStyle(color: Colors.grey.shade500))
+            ])));
+  }
+
+  Widget _buildCategoryToggle() {
+    return Container(
+        decoration: BoxDecoration(
+            color: Colors.grey.shade200,
+            borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.all(4),
+        child: Row(children: [
+          Expanded(
+              child: _buildToggleButton(
+                  title: "Weather",
+                  isSelected: _currentPageIndex == 0,
+                  onTap: () => _onCategoryTapped(0))),
+          Expanded(
+              child: _buildToggleButton(
+                  title: "Air Quality",
+                  isSelected: _currentPageIndex == 1,
+                  onTap: () => _onCategoryTapped(1)))
+        ]));
+  }
+
+  Widget _buildToggleButton(
+      {required String title,
+      required bool isSelected,
+      required VoidCallback onTap}) {
+    return GestureDetector(
+        onTap: onTap,
+        child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+                color: isSelected ? Colors.white : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2))
+                      ]
+                    : null),
+            child: Text(title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isSelected
+                        ? Theme.of(context).primaryColor
+                        : Colors.grey.shade600))));
+  }
+
+  Widget _buildHeaderStatus() {
+    Color statusColor = isDeviceOffline ? Colors.red : Colors.green;
+    return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey.shade300),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4))
+            ]),
+        child: Column(children: [
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text("UNIT NAME",
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade500,
+                          letterSpacing: 1.0)),
+                  const SizedBox(height: 4),
+                  Text(farmerName,
+                      style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87),
+                      overflow: TextOverflow.ellipsis)
+                ])),
+            Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: statusColor.withOpacity(0.3))),
+                child: Row(children: [
+                  Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                          color: statusColor, shape: BoxShape.circle)),
+                  const SizedBox(width: 8),
+                  Text(isDeviceOffline ? "OFFLINE" : deviceStatus.toUpperCase(),
+                      style: TextStyle(
+                          color: statusColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12))
+                ]))
+          ]),
+          const SizedBox(height: 20),
+          const Divider(height: 1),
+          const SizedBox(height: 20),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text("LOCATION",
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade500,
+                      letterSpacing: 1.0)),
+              const SizedBox(height: 4),
+              Row(children: [
+                Icon(Icons.location_on_outlined,
+                    size: 16, color: Colors.grey.shade700),
+                const SizedBox(width: 4),
+                Text(deviceLocation,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey.shade800))
+              ])
+            ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text("LAST UPDATE",
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade500,
+                      letterSpacing: 1.0)),
+              const SizedBox(height: 4),
+              Text(lastOnline,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade800))
+            ])
+          ])
+        ]));
+  }
+
+  Widget _buildDrawer() {
+    return Drawer(
+        child: Container(
+            color: Colors.white,
+            child: ListView(padding: EdgeInsets.zero, children: [
+              UserAccountsDrawerHeader(
+                  decoration: BoxDecoration(color: Colors.grey.shade100),
+                  accountName: Text(farmerName,
+                      style: const TextStyle(
+                          color: Colors.black87, fontWeight: FontWeight.bold)),
+                  accountEmail: Text(_userRole, // Show current role
+                      style: const TextStyle(color: Colors.black54)),
+                  currentAccountPicture: CircleAvatar(
+                      backgroundColor: Theme.of(context).primaryColor,
+                      child: Text(
+                          farmerName.isNotEmpty && farmerName != "--"
+                              ? farmerName[0].toUpperCase()
+                              : "U",
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 24)))),
+              ListTile(
+                  leading: const Icon(Icons.dashboard, color: Colors.grey),
+                  title: const Text('Dashboard',
+                      style: TextStyle(color: Colors.black87)),
+                  onTap: () => Navigator.pop(context)),
+              // NEW: Layout Settings
+              ListTile(
+                  leading:
+                      const Icon(Icons.grid_view_rounded, color: Colors.grey),
+                  title: const Text('Dashboard Layout',
+                      style: TextStyle(color: Colors.black87)),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    if (selectedDeviceId.isNotEmpty) {
+                      await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => DashboardSettingsScreen(
+                                  deviceId: selectedDeviceId)));
+                      // Refresh dashboard on return to apply changes
+                      _loadVisibilitySettings();
+                      setState(() {});
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text("Please select a unit first.")));
+                    }
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.notifications_active,
+                      color: Colors.grey),
+                  title: const Text('Alert Settings',
+                      style: TextStyle(color: Colors.black87)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (selectedDeviceId.isNotEmpty) {
+                      Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (context) => AlertSettingsScreen(
+                                  deviceId: selectedDeviceId)));
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text(
+                              "Please wait for device to load or select a unit first.")));
+                    }
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.settings, color: Colors.grey),
+                  title: const Text('Settings',
+                      style: TextStyle(color: Colors.black87)),
+                  onTap: () {}),
+              const Divider(),
+              ListTile(
+                  leading: const Icon(Icons.logout, color: Colors.redAccent),
+                  title: const Text('Logout',
+                      style: TextStyle(color: Colors.redAccent)),
+                  onTap: _logout)
+            ])));
+  }
+}
+
+class SparklinePainter extends CustomPainter {
+  final List<double> data;
+  final Color color;
+  final double lineWidth;
+  SparklinePainter(
+      {required this.data, required this.color, this.lineWidth = 2.0});
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = lineWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path();
+
+    // --- UPDATED LOGIC FOR FLAT LINE ---
+    // If all values are the same (e.g. all 0.0), or only 1 value, or if range is tiny
+    bool isFlat = data.every((e) => e == data[0]);
+
+    if (isFlat) {
+      // Draw straight line in middle
+      path.moveTo(0, size.height / 2);
+      path.lineTo(size.width, size.height / 2);
+    } else {
+      double minVal = data.reduce(min);
+      double maxVal = data.reduce(max);
+      double range = maxVal - minVal;
+
+      // Safety padding for range
+      if (range == 0) {
+        range = 1.0;
+        minVal -= 0.5;
+      } else {
+        minVal -= range * 0.1;
+        maxVal += range * 0.1;
+        range = maxVal - minVal;
+      }
+
+      double dx = size.width / (data.length - 1);
+      for (int i = 0; i < data.length; i++) {
+        double x = i * dx;
+        double y = size.height - ((data[i] - minVal) / range) * size.height;
+        if (i == 0)
+          path.moveTo(x, y);
+        else {
+          double prevX = (i - 1) * dx;
+          double prevY =
+              size.height - ((data[i - 1] - minVal) / range) * size.height;
+          double cX = (prevX + x) / 2;
+          path.cubicTo(cX, prevY, cX, y, x, y);
+        }
+      }
+    }
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+
+================================================================================
+FILE: screens\dashboard_settings_screen.dart
+================================================================================
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class DashboardSettingsScreen extends StatefulWidget {
+  final String deviceId;
+
+  const DashboardSettingsScreen({super.key, required this.deviceId});
+
+  @override
+  State<DashboardSettingsScreen> createState() =>
+      _DashboardSettingsScreenState();
+}
+
+class _DashboardSettingsScreenState extends State<DashboardSettingsScreen> {
+  // List of all possible sensors (Display Names)
+  final List<String> _allSensors = [
+    'Temperature',
+    'Humidity',
+    'Rainfall',
+    'Light Intensity',
+    'Pressure',
+    'Wind Speed',
+    'PM 2.5',
+    'CO2',
+    'TVOC',
+    'AQI'
+  ];
+
+  // Icons for visual flair
+  final Map<String, IconData> _sensorIcons = {
+    'Temperature': Icons.thermostat,
+    'Humidity': Icons.water_drop,
+    'Rainfall': Icons.cloudy_snowing,
+    'Light Intensity': Icons.wb_sunny,
+    'Pressure': Icons.speed,
+    'Wind Speed': Icons.air,
+    'PM 2.5': Icons.grain,
+    'CO2': Icons.cloud,
+    'TVOC': Icons.science,
+    'AQI': Icons.filter_drama,
+  };
+
+  // Map to store current visibility state
+  Map<String, bool> _visibility = {};
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  // Key helper: "device_101_show_Temperature"
+  String _getKey(String sensorName) =>
+      '${widget.deviceId}_show_${sensorName.replaceAll(' ', '')}';
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      for (var sensor in _allSensors) {
+        // Default to true (visible) if not set
+        _visibility[sensor] = prefs.getBool(_getKey(sensor)) ?? true;
+      }
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _toggleSensor(String sensor, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_getKey(sensor), value);
+    setState(() {
+      _visibility[sensor] = value;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        title: const Text(
+          "Dashboard Layout",
+          style: TextStyle(
+              color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 18),
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          icon:
+              const Icon(Icons.arrow_back_ios, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                const Text(
+                  "Visible Parameters",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ..._allSensors.map((sensor) {
+                  final isVisible = _visibility[sensor] ?? true;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.03),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      leading: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isVisible
+                              ? Theme.of(context).primaryColor.withOpacity(0.1)
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          _sensorIcons[sensor] ?? Icons.sensors,
+                          color: isVisible
+                              ? Theme.of(context).primaryColor
+                              : Colors.grey,
+                          size: 24,
+                        ),
+                      ),
+                      title: Text(
+                        sensor,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isVisible ? Colors.black87 : Colors.grey,
+                        ),
+                      ),
+                      trailing: Switch.adaptive(
+                        value: isVisible,
+                        activeColor: Theme.of(context).primaryColor,
+                        onChanged: (val) => _toggleSensor(sensor, val),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: screens\login_screen.dart
+================================================================================
+
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/session_manager.dart';
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  final SessionManager _session = SessionManager();
+  final http.Client _client = http.Client();
+
+  bool _isLoading = false;
+  bool _obscurePassword = true;
+
+  @override
+  void dispose() {
+    _client.close();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    FocusScope.of(context).unfocus();
+
+    if (_formKey.currentState!.validate()) {
+      setState(() => _isLoading = true);
+
+      try {
+        // STEP 1: Ensure CSRF token
+        final csrf = await _session.ensureCsrfToken(_client);
+
+        // STEP 2: Login Request
+        final response = await _session.retryRequest(() => _client.post(
+              Uri.parse('${_session.baseUrl}/login'),
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": _session.cookieHeader,
+                "User-Agent": _session.userAgent,
+              },
+              body: {
+                "username": _usernameController.text.trim(),
+                "password": _passwordController.text.trim(),
+                csrf['name']!: csrf['token']!,
+              },
+            ));
+
+        if (response.statusCode == 200) {
+          final loginData = jsonDecode(response.body);
+
+          if (loginData['status'] == true || loginData['status'] == 'success') {
+            // STEP 3: Save Session
+            await _session.saveSession();
+
+            if (mounted) {
+              Navigator.pushReplacementNamed(context, '/dashboard');
+            }
+          } else {
+            _showError(loginData['message'] ?? 'Login failed');
+          }
+        } else {
+          _showError('Login Error: ${response.statusCode}');
+        }
+      } catch (e) {
+        _showError('Connection failed. Check internet.');
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.blue,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.blue.withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 80,
+                    height: 80,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                        Icons.sensors,
+                        size: 80,
+                        color: Colors.white),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(32.0),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          "Welcome Back",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Sign in to access unit data.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 14, color: Colors.grey.shade600),
+                        ),
+                        const SizedBox(height: 32),
+
+                        // Username Field
+                        TextFormField(
+                          controller: _usernameController,
+                          decoration: InputDecoration(
+                            labelText: "User ID",
+                            prefixIcon: const Icon(Icons.person_outline),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          validator: (v) => (v == null || v.isEmpty)
+                              ? 'Please enter User ID'
+                              : null,
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Password Field
+                        TextFormField(
+                          controller: _passwordController,
+                          obscureText: _obscurePassword,
+                          decoration: InputDecoration(
+                            labelText: "Password",
+                            prefixIcon: const Icon(Icons.lock_outline),
+                            suffixIcon: IconButton(
+                              icon: Icon(_obscurePassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility),
+                              onPressed: () => setState(
+                                  () => _obscurePassword = !_obscurePassword),
+                            ),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          validator: (v) => (v == null || v.isEmpty)
+                              ? 'Please enter password'
+                              : null,
+                        ),
+                        const SizedBox(height: 32),
+
+                        // Login Button
+                        SizedBox(
+                          height: 50,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : _handleLogin,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Theme.of(context).primaryColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
+                              elevation: 0,
+                            ),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
+                                : const Text("LOGIN",
+                                    style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 1.0)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text("Version 1.0.3",
+                  style: TextStyle(color: Colors.grey.shade400)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: screens\onboarding_screen.dart
+================================================================================
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class OnboardingScreen extends StatefulWidget {
+  const OnboardingScreen({super.key});
+
+  @override
+  State<OnboardingScreen> createState() => _OnboardingScreenState();
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  final List<Map<String, dynamic>> _industries = [
+    {
+      'name': 'Agriculture',
+      'desc': 'Smart farming & soil monitoring',
+      'icon': Icons.agriculture_rounded,
+      'color': Colors.green
+    },
+    {
+      'name': 'Chemical',
+      'desc': 'Hazardous gas & levels tracking',
+      'icon': Icons.science_rounded,
+      'color': Colors.purple
+    },
+    {
+      'name': 'Cement',
+      'desc': 'Dust & particulate matter control',
+      'icon': Icons.business_rounded,
+      'color': Colors.blueGrey
+    },
+    {
+      'name': 'Other',
+      'desc': 'General industrial monitoring',
+      'icon': Icons.domain_rounded,
+      'color': Colors.blue
+    },
+  ];
+
+  String? _selectedIndustry;
+
+  Future<void> _completeOnboarding() async {
+    if (_selectedIndustry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select an industry type'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selected_industry', _selectedIndustry!);
+    await prefs.setBool('onboarding_complete', true);
+
+    if (mounted) {
+      Navigator.pushReplacementNamed(context, '/login');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Column(
+          children: [
+            const SizedBox(height: 40),
+            // --- HEADER ---
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.precision_manufacturing_rounded,
+                      size: 48,
+                      color: Color(0xFF00B0FF),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    "Select Your Industry",
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.black87,
+                      letterSpacing: -0.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "Tailor your dashboard to track the metrics that matter most to your operations.",
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.grey.shade600,
+                      height: 1.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 32),
+
+            // --- LIST ---
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                itemCount: _industries.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 16),
+                itemBuilder: (context, index) {
+                  final item = _industries[index];
+                  final isSelected = _selectedIndustry == item['name'];
+                  return _buildIndustryCard(item, isSelected);
+                },
+              ),
+            ),
+
+            // --- FOOTER BUTTON ---
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 20,
+                    offset: const Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed:
+                      _selectedIndustry != null ? _completeOnboarding : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00B0FF),
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey.shade300,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    elevation: _selectedIndustry != null ? 4 : 0,
+                    shadowColor: const Color(0xFF00B0FF).withOpacity(0.4),
+                  ),
+                  child: const Text(
+                    "CONTINUE",
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildIndustryCard(Map<String, dynamic> item, bool isSelected) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeInOut,
+      decoration: BoxDecoration(
+        color: isSelected ? item['color'].withOpacity(0.08) : Colors.white,
+        border: Border.all(
+          color: isSelected ? item['color'] : Colors.grey.shade200,
+          width: isSelected ? 2 : 1,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: isSelected
+            ? [
+                BoxShadow(
+                  color: item['color'].withOpacity(0.15),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                )
+              ]
+            : [],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _selectedIndustry = item['name']),
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                // Icon Box
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isSelected ? item['color'] : Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    item['icon'],
+                    color: isSelected ? Colors.white : Colors.grey.shade400,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Text Info
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item['name'],
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isSelected
+                              ? Colors.black87
+                              : Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        item['desc'],
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isSelected
+                              ? Colors.grey.shade800
+                              : Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Checkmark
+                if (isSelected)
+                  Icon(Icons.check_circle_rounded,
+                      color: item['color'], size: 24),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: screens\sensor_detail_screen.dart
+================================================================================
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+
+class GoogleFonts {
+  static TextStyle inter({
+    double? fontSize,
+    FontWeight? fontWeight,
+    Color? color,
+    double? height,
+  }) {
+    return TextStyle(
+      fontFamily: 'Inter',
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      color: color,
+      height: height,
+    );
+  }
+}
+
+// Configuration class to pass sensor-specific details
+class SensorConfig {
+  final String title;
+  final String
+      jsonKey; // The key in the API response (e.g., 'air_temp', 'pm25')
+  final String unit;
+  final Color color;
+  final IconData icon;
+  final String Function(double min, double max, double avg)? insightLogic;
+
+  SensorConfig({
+    required this.title,
+    required this.jsonKey,
+    required this.unit,
+    required this.color,
+    required this.icon,
+    this.insightLogic,
+  });
+}
+
+class SensorDetailScreen extends StatefulWidget {
+  final String deviceId;
+  final String sessionCookie;
+  final SensorConfig config;
+
+  const SensorDetailScreen({
+    super.key,
+    required this.deviceId,
+    required this.sessionCookie,
+    required this.config,
+  });
+
+  @override
+  State<SensorDetailScreen> createState() => _SensorDetailScreenState();
+}
+
+class _SensorDetailScreenState extends State<SensorDetailScreen> {
+  String _selectedRange = "24h";
+  List<GraphPoint> _graphData = [];
+  bool _isLoading = true;
+  String _errorMessage = "";
+
+  double maxVal = 0.0;
+  double minVal = 0.0;
+  double avgVal = 0.0;
+  String maxTime = "--";
+  String minTime = "--";
+
+  final String _baseUrl = "https://gridsphere.in/station/api";
+  final String _userAgent = "FlutterApp";
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchHistoryData(_selectedRange);
+  }
+
+  Future<void> _fetchHistoryData(String range) async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _selectedRange = range;
+      _errorMessage = "";
+      _graphData = [];
+    });
+
+    try {
+      String apiRange = 'daily';
+      if (range == '7d') apiRange = 'weekly';
+      if (range == '30d') apiRange = 'monthly';
+
+      final response = await http.get(
+        Uri.parse(
+            '$_baseUrl/devices/${widget.deviceId}/history?range=$apiRange'),
+        headers: {
+          'Cookie': widget.sessionCookie,
+          'User-Agent': _userAgent,
+          'Accept': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        List<dynamic> rawData = [];
+
+        if (jsonResponse is Map && jsonResponse.containsKey('data')) {
+          rawData = jsonResponse['data'];
+        } else if (jsonResponse is List) {
+          rawData = jsonResponse;
+        }
+
+        if (rawData.isNotEmpty) {
+          List<GraphPoint> points = [];
+          double sum = 0;
+          double localMax = -999999;
+          double localMin = 999999;
+          String localMaxTime = "--";
+          String localMinTime = "--";
+
+          for (var item in rawData) {
+            // Dynamic Key Access
+            if (item[widget.config.jsonKey] == null) continue;
+
+            double val =
+                double.tryParse(item[widget.config.jsonKey].toString()) ?? 0.0;
+            String timeStr = item['timestamp']?.toString() ?? "";
+            DateTime time = DateTime.now();
+
+            if (timeStr.isNotEmpty) {
+              try {
+                time = DateTime.parse(timeStr.replaceAll(' ', 'T'));
+              } catch (_) {}
+            }
+
+            points.add(GraphPoint(val, time));
+
+            sum += val;
+            if (val > localMax) {
+              localMax = val;
+              localMaxTime = _formatTimeForStat(time, range);
+            }
+            if (val < localMin) {
+              localMin = val;
+              localMinTime = _formatTimeForStat(time, range);
+            }
+          }
+
+          points.sort((a, b) => a.time.compareTo(b.time));
+
+          if (mounted) {
+            if (points.isNotEmpty) {
+              setState(() {
+                _graphData = points;
+                maxVal = localMax;
+                minVal = localMin;
+                avgVal = sum / points.length;
+                maxTime = localMaxTime;
+                minTime = localMinTime;
+                _isLoading = false;
+              });
+            } else {
+              setState(() {
+                _errorMessage = "No Data Available";
+                _isLoading = false;
+              });
+            }
+          }
+        } else {
+          if (mounted)
+            setState(() {
+              _errorMessage = "No Data Available";
+              _isLoading = false;
+            });
+        }
+      } else {
+        if (mounted)
+          setState(() {
+            _errorMessage = "Server Error: ${response.statusCode}";
+            _isLoading = false;
+          });
+      }
+    } catch (e) {
+      if (mounted)
+        setState(() {
+          _errorMessage = "Connection Error";
+          _isLoading = false;
+        });
+    }
+  }
+
+  String _formatTimeForStat(DateTime dt, String range) {
+    if (range == '24h') return DateFormat('h:mm a').format(dt);
+    return DateFormat('MMM d').format(dt);
+  }
+
+  String _getAverageLabel() {
+    if (_selectedRange == '24h') return "Average Daily";
+    if (_selectedRange == '7d') return "Average Weekly";
+    return "Average Monthly";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        title: Text(widget.config.title),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        centerTitle: true,
+        titleTextStyle: GoogleFonts.inter(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          color: Colors.black87,
+        ),
+        leading: IconButton(
+          icon:
+              const Icon(Icons.arrow_back_ios, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            // Tabs
+            Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  _buildTab("Day", "24h"),
+                  _buildTab("Week", "7d"),
+                  _buildTab("Month", "30d"),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Main Stats
+            Row(
+              children: [
+                Expanded(
+                  child: _buildStatBox(
+                    "Max ${widget.config.title}",
+                    "${maxVal.toStringAsFixed(1)} ${widget.config.unit}",
+                    widget.config.icon, // Use dynamic icon
+                    widget.config.color, // Use dynamic color
+                    maxTime,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildStatBox(
+                    "Min ${widget.config.title}",
+                    "${minVal.toStringAsFixed(1)} ${widget.config.unit}",
+                    widget.config.icon,
+                    widget.config.color.withOpacity(0.6),
+                    minTime,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Average Stat
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: widget.config.color.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.show_chart,
+                            color: widget.config.color, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        _getAverageLabel(),
+                        style: GoogleFonts.inter(
+                            fontSize: 14, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    "${avgVal.toStringAsFixed(1)} ${widget.config.unit}",
+                    style: GoogleFonts.inter(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Chart
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.grey.shade200),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8.0),
+                    child: Text(
+                      "${widget.config.title} Trend",
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    height: 250,
+                    width: double.infinity,
+                    child: _isLoading
+                        ? Center(
+                            child: CircularProgressIndicator(
+                                color: widget.config.color))
+                        : _graphData.isEmpty || _errorMessage.isNotEmpty
+                            ? Center(
+                                child: Text(
+                                  _errorMessage.isNotEmpty
+                                      ? _errorMessage
+                                      : "No Data Available",
+                                  style: TextStyle(color: Colors.grey.shade500),
+                                ),
+                              )
+                            : CustomPaint(
+                                painter: _DetailedChartPainter(
+                                  dataPoints: _graphData,
+                                  color: widget.config.color,
+                                  range: _selectedRange,
+                                ),
+                              ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 40),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ... (Tabs and StatBox widgets reuse existing logic) ...
+  // Added brevity, same logic as before but uses widget.config.color
+  Widget _buildTab(String text, String rangeKey) {
+    final isSelected = _selectedRange == rangeKey;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => _fetchHistoryData(rangeKey),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.white : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.05), blurRadius: 4)
+                  ]
+                : null,
+          ),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontWeight: FontWeight.w600,
+              color: isSelected ? Colors.black87 : Colors.grey.shade600,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatBox(
+      String label, String value, IconData icon, Color color, String subText) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 16),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  style: GoogleFonts.inter(
+                      fontSize: 12, color: Colors.grey.shade500),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.black87),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subText,
+            style: GoogleFonts.inter(fontSize: 11, color: Colors.grey.shade400),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class GraphPoint {
+  final double value;
+  final DateTime time;
+  GraphPoint(this.value, this.time);
+}
+
+// Reusing your painter logic exactly
+class _DetailedChartPainter extends CustomPainter {
+  final List<GraphPoint> dataPoints;
+  final Color color;
+  final String range;
+
+  _DetailedChartPainter(
+      {required this.dataPoints, required this.color, required this.range});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (dataPoints.isEmpty) return;
+
+    final double paddingLeft = 10.0;
+    final double paddingRight = 10.0;
+    final double paddingTop = 20.0;
+    final double paddingBottom = 20.0;
+    final double chartWidth = size.width - paddingLeft - paddingRight;
+    final double chartHeight = size.height - paddingTop - paddingBottom;
+
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 3.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    double minVal = dataPoints.map((e) => e.value).reduce(min);
+    double maxVal = dataPoints.map((e) => e.value).reduce(max);
+    double yRange = maxVal - minVal;
+
+    if (yRange == 0) {
+      yRange = 10;
+      minVal -= 5;
+      maxVal += 5;
+    } else {
+      minVal -= yRange * 0.1;
+      maxVal += yRange * 0.1;
+      yRange = maxVal - minVal;
+    }
+
+    final textPainter = TextPainter(
+        textDirection: ui.TextDirection.ltr, textAlign: TextAlign.left);
+    final gridPaint = Paint()
+      ..color = Colors.grey.withOpacity(0.1)
+      ..strokeWidth = 1;
+
+    for (int i = 0; i <= 3; i++) {
+      double y = paddingTop + chartHeight - (i * chartHeight / 3);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+      double labelVal = minVal + (i * yRange / 3);
+      textPainter.text = TextSpan(
+          text: labelVal.toStringAsFixed(0),
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 10));
+      textPainter.layout();
+      textPainter.paint(canvas, Offset(0, y - 12));
+    }
+
+    final path = Path();
+    double dx = dataPoints.length > 1
+        ? chartWidth / (dataPoints.length - 1)
+        : chartWidth;
+
+    for (int i = 0; i < dataPoints.length; i++) {
+      double normalizeVal = (dataPoints[i].value - minVal) / yRange;
+      double x = paddingLeft + (i * dx);
+      if (dataPoints.length == 1) x = size.width / 2;
+      double y = paddingTop + chartHeight - (normalizeVal * chartHeight);
+
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        double prevX = paddingLeft + ((i - 1) * dx);
+        double prevNormalizeVal = (dataPoints[i - 1].value - minVal) / yRange;
+        double prevY =
+            paddingTop + chartHeight - (prevNormalizeVal * chartHeight);
+        double controlX1 = prevX + dx / 2;
+        path.cubicTo(controlX1, prevY, controlX1, y, x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+
+    int step = (dataPoints.length / 5).ceil();
+    if (step < 1) step = 1;
+    for (int i = 0; i < dataPoints.length; i += step) {
+      double x = paddingLeft + (i * dx);
+      if (dataPoints.length == 1) x = size.width / 2;
+      DateTime t = dataPoints[i].time;
+      String label = range == '24h'
+          ? DateFormat('HH:mm').format(t)
+          : range == '7d'
+              ? DateFormat('E').format(t)
+              : DateFormat('d/M').format(t);
+      textPainter.text = TextSpan(
+          text: label,
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 10));
+      textPainter.layout();
+      textPainter.paint(
+          canvas, Offset(x - textPainter.width / 2, size.height - 15));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+
+================================================================================
+FILE: screens\splash_screen.dart
+================================================================================
+
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
+
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..forward();
+
+    _animation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutBack,
+    );
+
+    _checkSession();
+  }
+
+  Future<void> _checkSession() async {
+    await Future.delayed(const Duration(seconds: 3));
+
+    final prefs = await SharedPreferences.getInstance();
+    final String? sessionCookie = prefs.getString('session_cookie');
+    final bool onboardingComplete =
+        prefs.getBool('onboarding_complete') ?? false;
+
+    if (!mounted) return;
+
+    if (sessionCookie != null && sessionCookie.isNotEmpty) {
+      // User is logged in -> Dashboard
+      Navigator.pushReplacementNamed(context, '/dashboard');
+    } else if (onboardingComplete) {
+      // User finished onboarding but not logged in -> Login
+      Navigator.pushReplacementNamed(context, '/login');
+    } else {
+      // New User -> Onboarding
+      Navigator.pushReplacementNamed(context, '/onboarding');
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ScaleTransition(
+              scale: _animation,
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.blue,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.blue.withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 80,
+                    height: 80,
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                        Icons.sensors,
+                        size: 80,
+                        color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 30),
+            FadeTransition(
+              opacity: _controller,
+              child: Column(
+                children: [
+                  const Text(
+                    'Grid Sphere',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2.0,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const Text(
+                    'Industrial Station',
+                    style: TextStyle(
+                      fontSize: 18,
+                      letterSpacing: 2.0,
+                      color: Color.fromARGB(221, 42, 42, 42),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Initializing Sensor Grid...',
+                    style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 50),
+            const SizedBox(
+              width: 40,
+              height: 40,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.cyan),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: services\background_service.dart
+================================================================================
+
+import 'dart:convert';
+import 'dart:io'; // Import for SocketException
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
+import './notification_services.dart'; // Corrected import path (was notification_services.dart)
+
+const String fetchBackgroundTask = "fetchBackgroundTask";
+
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    print("Background Service: Starting Task: $task");
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final NotificationService notificationService = NotificationService();
+      await notificationService.init();
+
+      String? sessionCookie = prefs.getString('session_cookie');
+      List<String>? deviceIds = prefs.getStringList('user_device_ids');
+
+      if (sessionCookie == null) {
+        print("Background Service: No session cookie. Aborting.");
+        return Future.value(true);
+      }
+      if (deviceIds == null || deviceIds.isEmpty) {
+        print("Background Service: No devices to check. Aborting.");
+        return Future.value(true);
+      }
+
+      print("Background Service: Checking ${deviceIds.length} devices.");
+
+      for (String deviceId in deviceIds) {
+        bool hasAlerts = prefs.getBool('${deviceId}_has_alerts') ?? false;
+
+        if (!hasAlerts) {
+          print(
+              "Background Service: Device $deviceId has no alerts enabled. Skipping.");
+          continue;
+        }
+
+        try {
+          print("Background Service: Fetching data for Device $deviceId...");
+          final response = await http.get(
+            Uri.parse('https://gridsphere.in/station/api/live-data/$deviceId'),
+            headers: {
+              'Cookie': sessionCookie,
+              'User-Agent': 'FlutterApp',
+              'Accept': 'application/json',
+            },
+          ).timeout(const Duration(seconds: 30)); // Add timeout
+
+          if (response.statusCode == 200) {
+            final jsonResponse = jsonDecode(response.body);
+            List<dynamic> readings = (jsonResponse is List)
+                ? jsonResponse
+                : (jsonResponse['data'] ?? []);
+
+            if (readings.isNotEmpty) {
+              final data = readings[0];
+              String currentTimestamp = data['timestamp']?.toString() ?? "";
+              String? lastProcessed =
+                  prefs.getString('last_processed_$deviceId');
+
+              print(
+                  "Background Service: Data TS: $currentTimestamp (Last: $lastProcessed)");
+
+              // --- CRITICAL: Logic to trigger alert ---
+              // If timestamps differ OR if we are debugging (force check)
+              if (currentTimestamp.isNotEmpty &&
+                  currentTimestamp != lastProcessed) {
+                print(
+                    "Background Service: New data found! Checking thresholds.");
+
+                await _check(prefs, deviceId, 'air_temp', 'Temp', data['temp'],
+                    '°C', notificationService);
+                await _check(prefs, deviceId, 'humidity', 'Humidity',
+                    data['humidity'], '%', notificationService);
+                await _check(prefs, deviceId, 'rainfall', 'Rain',
+                    data['rainfall'], 'mm', notificationService);
+                await _check(prefs, deviceId, 'light_intensity', 'Light',
+                    data['light_intensity'], 'lux', notificationService);
+                await _check(prefs, deviceId, 'pressure', 'Pressure',
+                    data['pressure'], 'hPa', notificationService);
+                await _check(prefs, deviceId, 'wind', 'Wind',
+                    data['wind_speed'], 'km/h', notificationService);
+                await _check(prefs, deviceId, 'pm25', 'PM2.5', data['pm25'],
+                    'µg/m³', notificationService);
+                await _check(prefs, deviceId, 'co2', 'CO2', data['co2'], 'ppm',
+                    notificationService);
+                await _check(prefs, deviceId, 'tvoc', 'TVOC', data['tvoc'],
+                    'ppb', notificationService);
+                await _check(prefs, deviceId, 'aqi', 'AQI', data['aqi'], '',
+                    notificationService);
+
+                await prefs.setString(
+                    'last_processed_$deviceId', currentTimestamp);
+              } else {
+                print("Background Service: Data is old. No alert needed.");
+              }
+            }
+          } else {
+            print("Background Service: API Error ${response.statusCode}");
+          }
+        } on SocketException catch (e) {
+          print("Background Service: Network Error (SocketException): $e");
+          // This confirms no internet.
+          // If on emulator: Check emulator wifi.
+          // If on device: Check background data permissions.
+        } catch (e) {
+          print("Background Service: Error checking device $deviceId: $e");
+        }
+      }
+    } catch (e) {
+      print("Background Task Fatal Error: $e");
+    }
+
+    return Future.value(true);
+  });
+}
+
+Future<void> _check(
+  SharedPreferences prefs,
+  String deviceId,
+  String key,
+  String label,
+  dynamic rawValue,
+  String unit,
+  NotificationService notificationService,
+) async {
+  bool enabled = prefs.getBool('${deviceId}_${key}_alert_enabled') ?? false;
+  if (!enabled) return;
+
+  double? value = double.tryParse(rawValue.toString());
+  if (value == null) return;
+
+  double? min = prefs.getDouble('${deviceId}_${key}_min');
+  double? max = prefs.getDouble('${deviceId}_${key}_max');
+
+  int notifId = (deviceId + key).hashCode;
+
+  if (max != null && value > max) {
+    print("Background Service: ALERT! $label ($value) > Max ($max)");
+    await notificationService.showNotification(
+      notifId,
+      "High $label Alert (Unit $deviceId)",
+      "$label is $value $unit, exceeding limit of $max $unit.",
+    );
+  } else if (min != null && value < min) {
+    print("Background Service: ALERT! $label ($value) < Min ($min)");
+    await notificationService.showNotification(
+      notifId,
+      "Low $label Alert (Unit $deviceId)",
+      "$label is $value $unit, below limit of $min $unit.",
+    );
+  }
+}
+
+
+================================================================================
+FILE: services\notification_services.dart
+================================================================================
+
+import 'dart:io';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+class NotificationService {
+  static final NotificationService _instance = NotificationService._internal();
+  factory NotificationService() => _instance;
+  NotificationService._internal();
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  bool _isInitialized = false;
+
+  Future<void> init() async {
+    if (_isInitialized) return;
+
+    // 1. Setup Android Settings (Icon must exist in drawable/mipmap)
+    // Ensure '@mipmap/ic_launcher' is present in your project's Android resources.
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    // 2. Initialization Settings
+    const InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+
+    // 3. Initialize the plugin
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        // This handles what happens when a user taps the notification.
+        // You can add navigation logic here to open a specific unit's detail screen.
+      },
+    );
+
+    _isInitialized = true;
+  }
+
+  /// CRITICAL: Request notification permissions for Android 13+ (API 33+)
+  /// This must be called from the UI (e.g., in Dashboard initState) on newer Android devices.
+  Future<void> requestPermissions() async {
+    if (Platform.isAndroid) {
+      final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+          flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+
+      await androidImplementation?.requestNotificationsPermission();
+    }
+  }
+
+  Future<void> showNotification(int id, String title, String body) async {
+    // Define a high-priority channel
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'industrial_alerts_channel', // Channel ID (keep this constant)
+      'Critical Sensor Alerts', // Channel Name (visible to user in settings)
+      channelDescription: 'Notifications for sensor threshold alerts',
+      importance: Importance
+          .max, // MAX importance makes it pop up (heads-up notification)
+      priority:
+          Priority.high, // HIGH priority ensures the system prioritizes it
+      showWhen: true,
+      enableVibration: true,
+      playSound: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+
+    await flutterLocalNotificationsPlugin.show(
+      id,
+      title,
+      body,
+      platformChannelSpecifics,
+    );
+  }
+}
+
+
+================================================================================
+FILE: services\session_manager.dart
+================================================================================
+
+import 'dart:convert';
+import 'package:flutter/foundation.dart'; // For debugPrint
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// Centralized manager to handle tokens, cookies, and session persistence.
+class SessionManager {
+  static final SessionManager _instance = SessionManager._internal();
+  factory SessionManager() => _instance;
+  SessionManager._internal();
+
+  final String baseUrl = "https://gridsphere.in/station/api";
+  final String userAgent = "FlutterApp";
+
+  String? _csrfName;
+  String? _csrfToken;
+  final Map<String, String> _cookieJar = {};
+
+  /// Returns the current combined cookie string for headers.
+  String get cookieHeader =>
+      _cookieJar.entries.map((e) => "${e.key}=${e.value}").join("; ");
+
+  /// Persists session to local storage.
+  Future<void> saveSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('session_cookie', cookieHeader);
+  }
+
+  /// Loads session from local storage.
+  Future<void> loadSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('session_cookie');
+    if (saved != null) {
+      _updateCookieJar(saved,
+          saveToDisk: false); // Don't re-save what we just loaded
+    }
+  }
+
+  /// Clears session (Logout).
+  Future<void> clearSession() async {
+    _cookieJar.clear();
+    _csrfName = null;
+    _csrfToken = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('session_cookie');
+  }
+
+  /// Extracts cookies from 'set-cookie' header.
+  /// [saveToDisk] defaults to true to handle session rotation automatically.
+  void _updateCookieJar(String? rawCookies, {bool saveToDisk = true}) {
+    if (rawCookies == null || rawCookies.isEmpty) return;
+
+    // Regex handles standard "Key=Value" cookie format
+    final regex = RegExp(r'([a-zA-Z0-9_-]+)=([^;]+)');
+    final matches = regex.allMatches(rawCookies);
+
+    final Set<String> ignoreKeys = {
+      'expires',
+      'max-age',
+      'path',
+      'domain',
+      'secure',
+      'httponly',
+      'samesite'
+    };
+
+    bool changed = false;
+
+    for (final match in matches) {
+      String key = match.group(1)?.trim() ?? "";
+      String value = match.group(2)?.trim() ?? "";
+
+      if (key.isNotEmpty && !ignoreKeys.contains(key.toLowerCase())) {
+        // Only update if value is different (optimization)
+        if (_cookieJar[key] != value) {
+          _cookieJar[key] = value;
+          changed = true;
+        }
+      }
+    }
+
+    // If cookies changed during this request, persist them immediately.
+    // This fixes the issue where session rotation happens but isn't saved.
+    if (changed && saveToDisk) {
+      saveSession();
+    }
+  }
+
+  /// Fetches CSRF token only if not already present or if forced.
+  Future<Map<String, String>> ensureCsrfToken(http.Client client) async {
+    // If we already have tokens in memory, return them to save a network call
+    if (_csrfToken != null && _csrfName != null) {
+      return {'name': _csrfName!, 'token': _csrfToken!};
+    }
+
+    try {
+      final response = await client.get(
+        Uri.parse('$baseUrl/getCSRF'),
+        headers: {'User-Agent': userAgent},
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        _csrfName = data['csrf_name'];
+        _csrfToken = data['csrf_token'];
+
+        // Capture initial session cookies
+        _updateCookieJar(response.headers['set-cookie']);
+
+        return {'name': _csrfName!, 'token': _csrfToken!};
+      }
+    } catch (e) {
+      debugPrint("CSRF Fetch Error: $e");
+    }
+    throw Exception("Failed to fetch CSRF token");
+  }
+
+  /// Generic request wrapper with retry logic and session rotation handling.
+  Future<http.Response> retryRequest(
+    Future<http.Response> Function() requestAction, {
+    int maxRetries = 3,
+  }) async {
+    int attempts = 0;
+    while (attempts < maxRetries) {
+      try {
+        final response = await requestAction();
+
+        // 1. Capture any session cookies rotated by the server
+        _updateCookieJar(response.headers['set-cookie']);
+
+        // 2. Stop retrying if we are unauthorized (Session expired/Invalid)
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          debugPrint("Auth failed (401/403). Stopping retries.");
+          // Optional: You could trigger a global logout here via a stream
+          return response;
+        }
+
+        // 3. If server error (500+), throw to trigger retry
+        if (response.statusCode >= 500) {
+          throw http.ClientException("Server Error ${response.statusCode}");
+        }
+
+        return response;
+      } catch (e) {
+        attempts++;
+        debugPrint("Request attempt $attempts failed: $e");
+        if (attempts >= maxRetries) rethrow;
+
+        // Exponential backoff: 1s, 2s, 3s...
+        await Future.delayed(Duration(seconds: attempts));
+      }
+    }
+    throw Exception("Request failed after $maxRetries retries");
+  }
+}
+

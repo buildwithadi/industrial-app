@@ -19,7 +19,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'Temperature',
     'Humidity',
     'Rainfall',
-    'Light',
+    'Light Intensity', // Adjusted to match Dashboard settings keys if needed
     'Pressure',
     'Wind Speed',
     'PM 2.5',
@@ -28,12 +28,26 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'AQI'
   ];
 
+  // Icons to match Dashboard Settings
+  final Map<String, IconData> _sensorIcons = {
+    'Temperature': Icons.thermostat,
+    'Humidity': Icons.water_drop,
+    'Rainfall': Icons.cloudy_snowing,
+    'Light Intensity': Icons.wb_sunny,
+    'Pressure': Icons.speed,
+    'Wind Speed': Icons.air,
+    'PM 2.5': Icons.grain,
+    'CO2': Icons.cloud,
+    'TVOC': Icons.science,
+    'AQI': Icons.filter_drama,
+  };
+
   // Mapping display names to the keys used in JSON/SharedPreferences
   final Map<String, String> _sensorKeys = {
     'Temperature': 'air_temp',
     'Humidity': 'humidity',
     'Rainfall': 'rainfall',
-    'Light': 'light_intensity',
+    'Light Intensity': 'light_intensity',
     'Pressure': 'pressure',
     'Wind Speed': 'wind',
     'PM 2.5': 'pm25',
@@ -56,7 +70,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     for (var sensor in _sensors) {
-      String key = _sensorKeys[sensor]!;
+      String key = _sensorKeys[sensor]!; // Use the map to get safe key
 
       _minControllers[sensor] = TextEditingController(
           text: prefs.getDouble(_getKey(key, 'min'))?.toString() ?? '');
@@ -116,9 +130,9 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: Text(
-          "Alerts: Unit ${widget.deviceId}",
-          style: const TextStyle(
+        title: const Text(
+          "Alert Configuration",
+          style: TextStyle(
             color: Colors.black87,
             fontWeight: FontWeight.bold,
             fontSize: 18,
@@ -134,8 +148,8 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.check_circle_outline,
-                color: Colors.blue, size: 28),
+            icon: const Icon(Icons.check_circle,
+                color: Color(0xFF00B0FF), size: 28),
             onPressed: _saveSettings,
             tooltip: "Save Settings",
           )
@@ -143,106 +157,169 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
+          : ListView(
               padding: const EdgeInsets.all(20),
-              itemCount: _sensors.length,
-              itemBuilder: (context, index) {
-                String sensor = _sensors[index];
-                bool isEnabled = _enabled[sensor] ?? false;
-
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.03),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+              children: [
+                const Text(
+                  "Set Thresholds",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                    letterSpacing: 0.5,
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              sensor,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: isEnabled ? Colors.black87 : Colors.grey,
-                              ),
-                            ),
-                            Switch.adaptive(
-                              value: isEnabled,
-                              onChanged: (val) {
-                                setState(() {
-                                  _enabled[sensor] = val;
-                                });
-                              },
-                              activeColor: Theme.of(context).primaryColor,
-                            ),
-                          ],
-                        ),
-                        if (isEnabled) ...[
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildThresholdInput(
-                                  _minControllers[sensor]!,
-                                  "Min Threshold",
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: _buildThresholdInput(
-                                  _maxControllers[sensor]!,
-                                  "Max Threshold",
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                );
-              },
+                ),
+                const SizedBox(height: 12),
+                ..._sensors.map((sensor) {
+                  return _buildSensorCard(sensor);
+                }).toList(),
+                const SizedBox(height: 40), // Bottom padding
+              ],
             ),
     );
   }
 
-  Widget _buildThresholdInput(TextEditingController controller, String label) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-        filled: true,
-        fillColor: const Color(0xFFFAFAFA),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade200),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Colors.blue, width: 1.5),
-        ),
+  Widget _buildSensorCard(String sensor) {
+    bool isEnabled = _enabled[sensor] ?? false;
+    Color primaryColor = Theme.of(context).primaryColor;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
+      child: Column(
+        children: [
+          // Header Row (Matches Dashboard Settings Style)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isEnabled
+                        ? primaryColor.withOpacity(0.1)
+                        : Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    _sensorIcons[sensor] ?? Icons.sensors,
+                    color: isEnabled ? primaryColor : Colors.grey,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    sensor,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: isEnabled ? Colors.black87 : Colors.grey,
+                    ),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: isEnabled,
+                  activeColor: primaryColor,
+                  onChanged: (val) {
+                    setState(() {
+                      _enabled[sensor] = val;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+
+          // Expandable Input Section
+          if (isEnabled) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: const Divider(height: 1),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _buildThresholdInput(
+                      _minControllers[sensor]!,
+                      "Min Limit",
+                      Icons.arrow_downward_rounded,
+                      Colors.orange,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildThresholdInput(
+                      _maxControllers[sensor]!,
+                      "Max Limit",
+                      Icons.arrow_upward_rounded,
+                      Colors.redAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThresholdInput(TextEditingController controller, String label,
+      IconData icon, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label.toUpperCase(),
+          style: TextStyle(
+              color: Colors.grey.shade500,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5),
+        ),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          decoration: InputDecoration(
+            isDense: true,
+            prefixIcon: Icon(icon, size: 16, color: color),
+            prefixIconConstraints: const BoxConstraints(minWidth: 32),
+            filled: true,
+            fillColor: const Color(0xFFFAFAFA),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey.shade200),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey.shade200),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: color.withOpacity(0.5), width: 1.5),
+            ),
+            hintText: "--",
+            hintStyle: TextStyle(color: Colors.grey.shade300),
+          ),
+        ),
+      ],
     );
   }
 }
