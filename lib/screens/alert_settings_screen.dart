@@ -11,6 +11,7 @@ class AlertSettingsScreen extends StatefulWidget {
 }
 
 class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
+  // Using late initialization with ? to handle nullability safety during loading
   final Map<String, TextEditingController> _minControllers = {};
   final Map<String, TextEditingController> _maxControllers = {};
   final Map<String, bool> _enabled = {};
@@ -19,7 +20,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'Temperature',
     'Humidity',
     'Rainfall',
-    'Light Intensity', // Adjusted to match Dashboard settings keys if needed
+    'Light Intensity',
     'Pressure',
     'Wind Speed',
     'PM 2.5',
@@ -28,7 +29,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'AQI'
   ];
 
-  // Icons to match Dashboard Settings
   final Map<String, IconData> _sensorIcons = {
     'Temperature': Icons.thermostat,
     'Humidity': Icons.water_drop,
@@ -42,7 +42,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
     'AQI': Icons.filter_drama,
   };
 
-  // Mapping display names to the keys used in JSON/SharedPreferences
   final Map<String, String> _sensorKeys = {
     'Temperature': 'air_temp',
     'Humidity': 'humidity',
@@ -70,7 +69,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     for (var sensor in _sensors) {
-      String key = _sensorKeys[sensor]!; // Use the map to get safe key
+      String key = _sensorKeys[sensor]!;
 
       _minControllers[sensor] = TextEditingController(
           text: prefs.getDouble(_getKey(key, 'min'))?.toString() ?? '');
@@ -78,10 +77,16 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
           text: prefs.getDouble(_getKey(key, 'max'))?.toString() ?? '');
       _enabled[sensor] = prefs.getBool(_getKey(key, 'alert_enabled')) ?? false;
     }
-    setState(() => _isLoading = false);
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _saveSettings() async {
+    // Prevent saving if data hasn't loaded (Avoids NullPointer Crash)
+    if (_isLoading) return;
+
     final prefs = await SharedPreferences.getInstance();
 
     bool anyEnabled = _enabled.values.any((e) => e == true);
@@ -89,22 +94,37 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
 
     for (var sensor in _sensors) {
       String key = _sensorKeys[sensor]!;
+      bool isSensorEnabled = _enabled[sensor] ?? false;
 
-      if (_minControllers[sensor]!.text.isNotEmpty) {
-        await prefs.setDouble(
-            _getKey(key, 'min'), double.parse(_minControllers[sensor]!.text));
+      // 1. Safe parsing for MIN value
+      String minText = _minControllers[sensor]?.text ?? '';
+      if (minText.isNotEmpty) {
+        double? val = double.tryParse(minText); // Fix: use tryParse
+        if (val != null) {
+          await prefs.setDouble(_getKey(key, 'min'), val);
+        } else {
+          // Input was invalid (e.g. "abc"), effectively remove setting
+          await prefs.remove(_getKey(key, 'min'));
+        }
       } else {
         await prefs.remove(_getKey(key, 'min'));
       }
 
-      if (_maxControllers[sensor]!.text.isNotEmpty) {
-        await prefs.setDouble(
-            _getKey(key, 'max'), double.parse(_maxControllers[sensor]!.text));
+      // 2. Safe parsing for MAX value
+      String maxText = _maxControllers[sensor]?.text ?? '';
+      if (maxText.isNotEmpty) {
+        double? val = double.tryParse(maxText); // Fix: use tryParse
+        if (val != null) {
+          await prefs.setDouble(_getKey(key, 'max'), val);
+        } else {
+          await prefs.remove(_getKey(key, 'max'));
+        }
       } else {
         await prefs.remove(_getKey(key, 'max'));
       }
 
-      await prefs.setBool(_getKey(key, 'alert_enabled'), _enabled[sensor]!);
+      // 3. Save Enabled State
+      await prefs.setBool(_getKey(key, 'alert_enabled'), isSensorEnabled);
     }
 
     if (mounted) {
@@ -148,9 +168,11 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.check_circle,
-                color: Color(0xFF00B0FF), size: 28),
-            onPressed: _saveSettings,
+            icon: Icon(Icons.check_circle,
+                color: _isLoading ? Colors.grey : const Color(0xFF00B0FF),
+                size: 28),
+            // Disable button while loading to prevent crash
+            onPressed: _isLoading ? null : _saveSettings,
             tooltip: "Save Settings",
           )
         ],
@@ -173,7 +195,7 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
                 ..._sensors.map((sensor) {
                   return _buildSensorCard(sensor);
                 }).toList(),
-                const SizedBox(height: 40), // Bottom padding
+                const SizedBox(height: 40),
               ],
             ),
     );
@@ -198,7 +220,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
       ),
       child: Column(
         children: [
-          // Header Row (Matches Dashboard Settings Style)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
@@ -240,8 +261,6 @@ class _AlertSettingsScreenState extends State<AlertSettingsScreen> {
               ],
             ),
           ),
-
-          // Expandable Input Section
           if (isEnabled) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),

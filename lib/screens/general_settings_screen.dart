@@ -1,11 +1,128 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'alert_settings_screen.dart';
 import 'dashboard_settings_screen.dart';
 
-class GeneralSettingsScreen extends StatelessWidget {
+class GeneralSettingsScreen extends StatefulWidget {
   final String deviceId;
 
   const GeneralSettingsScreen({super.key, required this.deviceId});
+
+  @override
+  State<GeneralSettingsScreen> createState() => _GeneralSettingsScreenState();
+}
+
+class _GeneralSettingsScreenState extends State<GeneralSettingsScreen> {
+  String _currentIndustry = "Loading...";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIndustry();
+  }
+
+  Future<void> _loadIndustry() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _currentIndustry = prefs.getString('selected_industry') ?? "Other";
+    });
+  }
+
+  Future<void> _updateIndustry(String newIndustry) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('selected_industry', newIndustry);
+    setState(() {
+      _currentIndustry = newIndustry;
+    });
+  }
+
+  void _showIndustryPicker() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Select Industry",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _buildIndustryOption(
+                  "Agriculture", Icons.agriculture_rounded, Colors.green),
+              _buildIndustryOption(
+                  "Chemical", Icons.science_rounded, Colors.purple),
+              _buildIndustryOption(
+                  "Cement", Icons.business_rounded, Colors.blueGrey),
+              _buildIndustryOption("Other", Icons.domain_rounded, Colors.blue),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildIndustryOption(String name, IconData icon, Color color) {
+    bool isSelected = _currentIndustry == name;
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: color),
+      ),
+      title: Text(
+        name,
+        style: TextStyle(
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          color: isSelected ? Colors.black : Colors.grey[700],
+        ),
+      ),
+      trailing: isSelected ? Icon(Icons.check_circle, color: color) : null,
+      onTap: () {
+        _updateIndustry(name);
+        Navigator.pop(context);
+      },
+    );
+  }
+
+  IconData _getIndustryIcon(String name) {
+    switch (name) {
+      case 'Agriculture':
+        return Icons.agriculture_rounded;
+      case 'Chemical':
+        return Icons.science_rounded;
+      case 'Cement':
+        return Icons.business_rounded;
+      default:
+        return Icons.domain_rounded;
+    }
+  }
+
+  Color _getIndustryColor(String name) {
+    switch (name) {
+      case 'Agriculture':
+        return Colors.green;
+      case 'Chemical':
+        return Colors.purple;
+      case 'Cement':
+        return Colors.blueGrey;
+      default:
+        return Colors.blue;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +162,7 @@ class GeneralSettingsScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (context) =>
-                      DashboardSettingsScreen(deviceId: deviceId),
+                      DashboardSettingsScreen(deviceId: widget.deviceId),
                 ),
               );
             },
@@ -61,33 +178,28 @@ class GeneralSettingsScreen extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => AlertSettingsScreen(deviceId: deviceId),
+                  builder: (context) =>
+                      AlertSettingsScreen(deviceId: widget.deviceId),
                 ),
               );
             },
           ),
-          const SizedBox(height: 32),
-          _buildSectionHeader("App Info"),
-          const SizedBox(height: 12),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const ListTile(
-              leading: Icon(Icons.info_outline, color: Colors.grey),
-              title: Text("Version"),
-              trailing: Text("1.0.3", style: TextStyle(color: Colors.grey)),
-            ),
-          ),
         ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showIndustryPicker,
+        elevation: 4,
+        backgroundColor: _getIndustryColor(_currentIndustry),
+        icon: Icon(_getIndustryIcon(_currentIndustry), color: Colors.white),
+        label: Text(
+          "Current Industry: $_currentIndustry",
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+            letterSpacing: 0.5,
+          ),
+        ),
       ),
     );
   }

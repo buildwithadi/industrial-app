@@ -256,6 +256,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         if (deviceList.isNotEmpty) {
           final prefs = await SharedPreferences.getInstance();
+
+          // CRITICAL FIX: Save Device IDs for Background Service
+          List<String> ids =
+              deviceList.map((d) => d['d_id'].toString()).toList();
+          await prefs.setStringList('user_device_ids', ids);
+
           String? savedId = prefs.getString('selected_device_id');
           var deviceToSelect = deviceList[0];
 
@@ -510,8 +516,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isVisible(String name) => _sensorVisibility[name] ?? true;
 
     if (isWeather) {
-      bool isAgri = _userRole == 'Agriculture' || _userRole == 'Other';
-      if (isAgri || true) {
+      // Logic fix: Only Agri and Other see Weather
+      bool isRelevant = _userRole == 'Agriculture' || _userRole == 'Other';
+      if (isRelevant) {
         if (isVisible('Temperature'))
           items.add({
             'n': 'Temperature',
@@ -538,10 +545,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               .add({'n': 'Wind Speed', 'v': v('wind', 'km/h'), 'h': h('wind')});
       }
     } else {
-      bool isIndustrial = _userRole == 'Chemical' ||
+      // Logic fix: Only Chem, Cement and Other see AQI
+      bool isRelevant = _userRole == 'Chemical' ||
           _userRole == 'Cement' ||
           _userRole == 'Other';
-      if (isIndustrial || true) {
+      if (isRelevant) {
         if (isVisible('AQI'))
           items.add({'n': 'AQI', 'v': v('aqi', ''), 'h': h('aqi')});
         if (isVisible('PM 2.5'))
@@ -976,7 +984,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   );
                   // Refresh settings when returning
                   _loadVisibilitySettings();
-                  setState(() {});
+
+                  // RELOAD INDUSTRY PREFERENCE
+                  final prefs = await SharedPreferences.getInstance();
+                  setState(() {
+                    _userRole = prefs.getString('selected_industry') ?? "Other";
+                  });
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                       content: Text("Please select a unit first.")));
